@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders
+  namespace: retail-store
+  labels:
+    app: orders
+spec:
+  type: ClusterIP
+  selector:
+    app: orders
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP

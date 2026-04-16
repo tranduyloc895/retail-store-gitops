@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart
+  namespace: retail-store
+  labels:
+    app: cart
+spec:
+  type: ClusterIP
+  selector:
+    app: cart
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP

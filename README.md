@@ -1,50 +1,50 @@
 # Retail Store GitOps
 
-Kubernetes manifests & ArgoCD Application definitions cho dự án **DevSecOps E-commerce** (NT114 - UIT).
+Kubernetes manifests & ArgoCD Application definitions for the **DevSecOps E-commerce** project (NT114 — UIT).
 
-Đây là **source of truth** cho trạng thái mong muốn (desired state) của toàn bộ workload chạy trên EKS cluster `ecommerce-cluster`. ArgoCD theo dõi repo này và tự động đồng bộ lên cluster mỗi khi có commit mới.
+This repo is the **source of truth** for the desired state of every workload running on the EKS cluster `ecommerce-cluster`. ArgoCD watches this repo and automatically syncs changes to the cluster on every new commit.
 
-> **GitOps principle:** Nếu nó không có trong Git, nó không được chạy trên cluster. Mọi thay đổi đều phải đi qua commit.
-
----
-
-## Mục lục
-
-- [GitOps là gì và tại sao dùng](#gitops-là-gì-và-tại-sao-dùng)
-- [Kiến trúc luồng triển khai](#kiến-trúc-luồng-triển-khai)
-- [Cấu trúc thư mục](#cấu-trúc-thư-mục)
-- [Hoạt động của ArgoCD Application](#hoạt-động-của-argocd-application)
-- [Luồng CI/CD với Jenkins](#luồng-cicd-với-jenkins)
-- [Hướng dẫn sử dụng](#hướng-dẫn-sử-dụng)
-- [Thêm service mới](#thêm-service-mới)
-- [Troubleshooting](#troubleshooting)
+> **GitOps principle:** if it is not in Git, it is not running on the cluster. Every change must go through a commit.
 
 ---
 
-## GitOps là gì và tại sao dùng
+## Table of Contents
 
-**GitOps** = vận hành infrastructure/application bằng Git làm nguồn sự thật duy nhất. Thay vì developer/CI chạy `kubectl apply` thẳng vào cluster (push-based), có một controller (ArgoCD) **pull** manifests từ Git và apply vào cluster.
-
-### So sánh Push vs Pull
-
-| Aspect | Push (kubectl apply từ CI) | Pull (GitOps/ArgoCD) |
-|--------|---------------------------|----------------------|
-| Quyền vào cluster | CI cần credential admin | Chỉ controller trong cluster cần |
-| Drift detection | Không có | Tự phát hiện & self-heal |
-| Rollback | Phải chạy lại pipeline | `git revert` + auto-sync |
-| Audit trail | Log pipeline | Git history |
-| Multi-cluster | Cấu hình nhiều credential | Một repo, nhiều cluster pull |
-
-### Lợi ích cụ thể cho dự án
-
-1. **Giảm bề mặt tấn công**: Jenkins Agent **không còn cần quyền `AmazonEKSClusterAdminPolicy`** — chỉ cần quyền push lên Git repo này.
-2. **Lịch sử deploy rõ ràng**: Mọi thay đổi trên cluster đều có commit tương ứng, ai đổi, đổi gì, khi nào.
-3. **Self-healing**: Nếu ai đó `kubectl edit` trực tiếp trên cluster, ArgoCD phát hiện drift và khôi phục về trạng thái trong Git.
-4. **Rollback bằng `git revert`**: Không cần rebuild image, không cần chạy lại pipeline.
+- [What GitOps Is and Why We Use It](#what-gitops-is-and-why-we-use-it)
+- [Deployment Flow Architecture](#deployment-flow-architecture)
+- [Directory Structure](#directory-structure)
+- [How the ArgoCD Application Works](#how-the-argocd-application-works)
+- [CI/CD Flow with Jenkins](#cicd-flow-with-jenkins)
+- [Usage Guide](#usage-guide)
+- [Adding a New Service](#adding-a-new-service)
+- [Cleanup After Each Lab](#cleanup-after-each-lab)
 
 ---
 
-## Kiến trúc luồng triển khai
+## What GitOps Is and Why We Use It
+
+**GitOps** = operating infrastructure/applications with Git as the single source of truth. Instead of a developer/CI running `kubectl apply` directly against the cluster (push-based), a controller (ArgoCD) **pulls** manifests from Git and applies them to the cluster.
+
+### Push vs Pull
+
+| Aspect | Push (kubectl apply from CI) | Pull (GitOps / ArgoCD) |
+|--------|------------------------------|-------------------------|
+| Cluster permissions | CI needs admin credentials | Only the in-cluster controller needs them |
+| Drift detection | None | Auto-detected + self-heal |
+| Rollback | Re-run the pipeline | `git revert` + auto-sync |
+| Audit trail | Pipeline logs | Git history |
+| Multi-cluster | Configure many credentials | One repo, many clusters pull |
+
+### Concrete benefits for this project
+
+1. **Smaller attack surface:** the Jenkins Agent no longer needs the `AmazonEKSClusterAdminPolicy` — it only needs push access to this Git repo.
+2. **Clear deployment history:** every cluster change has a corresponding commit (who, what, when).
+3. **Self-healing:** if someone runs `kubectl edit` on the cluster, ArgoCD detects the drift and restores the state from Git.
+4. **Rollback via `git revert`:** no image rebuild, no pipeline re-run.
+
+---
+
+## Deployment Flow Architecture
 
 ```
 Developer          Jenkins            ECR             Git (this repo)      ArgoCD             EKS
@@ -69,44 +69,60 @@ Developer          Jenkins            ECR             Git (this repo)      ArgoC
    │                 │                 │                    │                │ sync status     │
 ```
 
-**Điểm cốt lõi**:
-- Jenkins **không bao giờ** chạy `kubectl apply` — chỉ commit thay đổi vào Git.
-- ArgoCD **không bao giờ** build image — chỉ pull manifest và đồng bộ.
-- Image tag = Git commit SHA (truy vết 1-1 giữa code ↔ image ↔ deployment).
+**Core principles:**
+- Jenkins **never** runs `kubectl apply` — it only commits changes to Git.
+- ArgoCD **never** builds images — it only pulls manifests and syncs.
+- Image tag = Git commit SHA (1-to-1 traceability between code ↔ image ↔ deployment).
 
 ---
 
-## Cấu trúc thư mục
+## Directory Structure
 
 ```
 retail-store-gitops/
 ├── README.md
 │
-├── apps/                           # Kubernetes manifests của từng service
-│   └── ui/
-│       ├── namespace.yml           #   Namespace: retail-store
-│       ├── deployment.yml          #   Deployment (image tag được Jenkins cập nhật tự động)
-│       └── service.yml             #   Service type LoadBalancer (expose public qua ELB)
+├── apps/                              # Kubernetes manifests for each service
+│   ├── ui/
+│   │   ├── namespace.yml              #   Namespace: retail-store
+│   │   ├── deployment.yml             #   Deployment (image tag updated by Jenkins)
+│   │   └── service.yml                #   Service type LoadBalancer
+│   ├── catalog/
+│   │   ├── deployment.yml
+│   │   └── service.yml                #   ClusterIP
+│   ├── cart/
+│   │   ├── deployment.yml
+│   │   └── service.yml                #   ClusterIP
+│   ├── orders/
+│   │   ├── deployment.yml
+│   │   └── service.yml                #   ClusterIP
+│   └── checkout/
+│       ├── deployment.yml
+│       └── service.yml                #   ClusterIP
 │
-└── argocd/                         # ArgoCD Application definitions
-    └── ui-application.yml          #   ArgoCD Application: retail-store-ui
+└── argocd/                            # ArgoCD Application definitions
+    ├── ui-application.yml
+    ├── catalog-application.yml
+    ├── cart-application.yml
+    ├── orders-application.yml
+    └── checkout-application.yml
 ```
 
-### Các service hiện tại
+### Current services
 
-| Service | Manifest path | ArgoCD Application | Trạng thái |
-|---------|---------------|--------------------|-----------|
-| UI | `apps/ui/` | `retail-store-ui` | ✅ Hoạt động |
-| Catalog | *(chưa có)* | *(chưa có)* | ⏳ Roadmap |
-| Cart | *(chưa có)* | *(chưa có)* | ⏳ Roadmap |
-| Orders | *(chưa có)* | *(chưa có)* | ⏳ Roadmap |
-| Checkout | *(chưa có)* | *(chưa có)* | ⏳ Roadmap |
+| Service | Manifest path | ArgoCD Application | Status |
+|---------|---------------|--------------------|--------|
+| UI | `apps/ui/` | `retail-store-ui` | Onboarded |
+| Catalog | `apps/catalog/` | `retail-store-catalog` | Onboarded |
+| Cart | `apps/cart/` | `retail-store-cart` | Onboarded |
+| Orders | `apps/orders/` | `retail-store-orders` | Onboarded |
+| Checkout | `apps/checkout/` | `retail-store-checkout` | Onboarded |
 
 ---
 
-## Hoạt động của ArgoCD Application
+## How the ArgoCD Application Works
 
-File `argocd/ui-application.yml` định nghĩa một ArgoCD `Application` resource:
+Every file under `argocd/` defines an ArgoCD `Application` resource. Example (`argocd/ui-application.yml`):
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -119,55 +135,59 @@ spec:
   source:
     repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
     targetRevision: main
-    path: apps/ui                    # Folder chứa manifest
+    path: apps/ui                    # Folder containing the manifests
   destination:
     server: https://kubernetes.default.svc
     namespace: retail-store
   syncPolicy:
     automated:
-      prune: true                    # Xoá resource không còn trong Git
-      selfHeal: true                 # Khôi phục nếu có ai sửa trực tiếp trên cluster
+      prune: true                    # Remove resources no longer in Git
+      selfHeal: true                 # Restore state if someone edits directly on the cluster
     syncOptions:
-      - CreateNamespace=true         # Tự tạo namespace nếu chưa có
+      - CreateNamespace=true         # Create the namespace if it does not exist
 ```
 
-### Giải thích từng field
+### Field reference
 
-| Field | Ý nghĩa |
+| Field | Meaning |
 |-------|---------|
-| `source.repoURL` | URL Git repo — ArgoCD pull từ đây |
-| `source.targetRevision` | Branch/tag/commit để track, ở đây là `main` |
-| `source.path` | Folder trong repo chứa manifest (không phải tên file cụ thể) |
-| `destination.server` | `kubernetes.default.svc` = chính cluster nơi ArgoCD đang chạy |
-| `destination.namespace` | Namespace đích để apply manifest |
-| `syncPolicy.automated.prune` | Xoá K8s resource nếu file manifest bị xoá khỏi Git |
-| `syncPolicy.automated.selfHeal` | Tự re-apply nếu state thực tế lệch state trong Git |
-| `CreateNamespace=true` | ArgoCD tự `kubectl create ns` nếu chưa tồn tại |
+| `source.repoURL` | Git repo URL — ArgoCD pulls from here |
+| `source.targetRevision` | Branch/tag/commit to track, here `main` |
+| `source.path` | Folder in the repo containing manifests (not a specific filename) |
+| `destination.server` | `kubernetes.default.svc` = the cluster where ArgoCD itself runs |
+| `destination.namespace` | Target namespace for the manifests |
+| `syncPolicy.automated.prune` | Delete a K8s resource when its manifest is removed from Git |
+| `syncPolicy.automated.selfHeal` | Re-apply manifest if the live state deviates from Git |
+| `CreateNamespace=true` | ArgoCD runs `kubectl create ns` automatically if needed |
 
-### Cách áp dụng ArgoCD Application lần đầu
+### First-time apply of ArgoCD Applications
 
 ```bash
-# Kết nối kubectl với EKS cluster
+# Connect kubectl to the EKS cluster
 aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
 
-# Apply Application definition
-kubectl apply -f argocd/ui-application.yml
+# Apply every Application definition
+kubectl apply -f argocd/
 
-# Kiểm tra
+# Verify
 kubectl get application -n argocd
-# NAME              SYNC STATUS   HEALTH STATUS
-# retail-store-ui   Synced        Healthy
+# NAME                    SYNC STATUS   HEALTH STATUS
+# retail-store-ui         Synced        Healthy
+# retail-store-catalog    Synced        Healthy
+# retail-store-cart       Synced        Healthy
+# retail-store-orders     Synced        Healthy
+# retail-store-checkout   Synced        Healthy
 ```
 
-Sau bước này, ArgoCD sẽ **tự động** poll repo mỗi 3 phút (mặc định) và đồng bộ bất kỳ thay đổi nào.
+Afterwards ArgoCD polls the repo every 3 minutes (default) and syncs any new changes automatically.
 
 ---
 
-## Luồng CI/CD với Jenkins
+## CI/CD Flow with Jenkins
 
-### Stage `Update GitOps` trong Jenkinsfile
+### The `Update GitOps` stage in the Jenkinsfile
 
-Mỗi lần build thành công (ở repo `retail-store-microservices`), Jenkins chạy stage sau để cập nhật image tag:
+On every successful build (in the `retail-store-microservices` repo), Jenkins runs this stage to update the image tag:
 
 ```groovy
 stage('Update GitOps') {
@@ -182,12 +202,13 @@ stage('Update GitOps') {
                 git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/tranduyloc895/retail-store-gitops.git gitops-repo
                 cd gitops-repo
 
-                sed -i "s|image:.*retail-store/ui.*|image: $FULL_IMAGE|" apps/ui/deployment.yml
+                sed -i "s|image:.*retail-store/<service>.*|image: $FULL_IMAGE|" apps/<service>/deployment.yml
+                grep -q "$FULL_IMAGE" apps/<service>/deployment.yml || { echo "sed FAILED"; exit 1; }
 
                 git config user.email "jenkins@ci.local"
                 git config user.name "Jenkins CI"
-                git add apps/ui/deployment.yml
-                git diff --staged --quiet || git commit -m "chore(ui): update image to $IMAGE_TAG"
+                git add apps/<service>/deployment.yml
+                git diff --staged --quiet || git commit -m "chore(<service>): update image to $IMAGE_TAG"
                 git push origin main
             '''
         }
@@ -195,77 +216,79 @@ stage('Update GitOps') {
 }
 ```
 
-### Giải thích từng bước
+### Step-by-step explanation
 
-| Bước | Mục đích |
-|------|----------|
-| `rm -rf gitops-repo` | Clean workspace cũ (tránh state leftover) |
-| `git clone` với token | Clone repo qua HTTPS với PAT (không dùng SSH key) |
-| `sed -i "s\|image:...\|"` | Thay dòng image cũ bằng image mới (tag = commit SHA) |
-| `git diff --staged --quiet \|\|` | Chỉ commit nếu có thay đổi thực sự (idempotent) |
-| `git push origin main` | Push thẳng lên main — ArgoCD sẽ detect trong vài phút |
+| Step | Purpose |
+|------|---------|
+| `rm -rf gitops-repo` | Clean leftover workspace |
+| `git clone` with token | Clone via HTTPS using a PAT (no SSH keys needed) |
+| `sed -i "s\|image:...\|"` | Replace the old image line with the new one (tag = commit SHA) |
+| `grep -q "$FULL_IMAGE"` | Verify the replacement actually happened (prevents silent `sed` failures) |
+| `git diff --staged --quiet \|\|` | Only commit if something actually changed (idempotent) |
+| `git push origin main` | Push to main — ArgoCD will pick it up within minutes |
 
-### Credential cần setup trong Jenkins
+### Required Jenkins credential
 
 **Credential ID: `github-gitops-token`**
-- **Kind**: Username with password
-- **Username**: GitHub username (ví dụ: `tranduyloc895`)
-- **Password**: GitHub Fine-grained Personal Access Token
+- **Kind:** Username with password
+- **Username:** GitHub username (e.g., `tranduyloc895`)
+- **Password:** GitHub Fine-grained Personal Access Token
 
-**Quyền token cần (nguyên tắc least-privilege)**:
-| Permission | Access | Lý do |
-|-----------|--------|-------|
+**Token permissions (least-privilege):**
+
+| Permission | Access | Reason |
+|-----------|--------|--------|
 | Contents | Read and write | `git clone` + `git push` |
-| Metadata | Read (auto) | Bắt buộc |
-| *(các quyền khác)* | — | **Không cấp** |
+| Metadata | Read (auto) | Required by GitHub |
+| *All others* | — | **Do not grant** |
 
-Repository selected: **Only `retail-store-gitops`** (không cấp toàn org).
+Repository selected: **only `retail-store-gitops`** (do not grant access to the whole org).
 
 ---
 
-## Hướng dẫn sử dụng
+## Usage Guide
 
-### Yêu cầu trước
+### Prerequisites
 
-- EKS cluster `ecommerce-cluster` đã chạy (module `02-cluster-eks` trong repo `infrastructure`)
-- ArgoCD đã được cài qua Helm (cùng module)
-- Repo này đã public hoặc ArgoCD đã được cấu hình credential
+- EKS cluster `ecommerce-cluster` is running (module `02-cluster-eks` in the `infrastructure` repo)
+- ArgoCD is installed via Helm (same module)
+- This repo is public, or ArgoCD has been configured with credentials
 
-### Apply ArgoCD Application
+### Apply the ArgoCD Applications
 
 ```bash
-# SSH vào Jenkins Agent (hoặc local đã update-kubeconfig)
+# SSH into the Jenkins Agent (or run locally after update-kubeconfig)
 aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
 
-# Apply
-kubectl apply -f argocd/ui-application.yml
+# Apply every Application in one shot
+kubectl apply -f argocd/
 
-# Xem status
-kubectl get application -n argocd retail-store-ui
+# Check status
+kubectl get application -n argocd
 ```
 
-### Truy cập ArgoCD UI
+### Access the ArgoCD UI
 
 ```bash
-# Port-forward ArgoCD server
+# Port-forward the ArgoCD server
 kubectl port-forward svc/argocd-server -n argocd 8080:443
 
-# Lấy password admin ban đầu
+# Retrieve the initial admin password
 kubectl get secret argocd-initial-admin-secret -n argocd \
   -o jsonpath="{.data.password}" | base64 -d
 ```
 
-Mở browser: `https://localhost:8080` — username `admin`, password từ command trên.
+Open `https://localhost:8080` — username `admin`, password from the command above.
 
-### Cập nhật thủ công (không qua Jenkins)
+### Manual update (bypass Jenkins)
 
-Trong trường hợp cần deploy không qua CI (hotfix, test):
+For a hotfix or a manual test:
 
 ```bash
 git clone https://github.com/tranduyloc895/retail-store-gitops.git
 cd retail-store-gitops
 
-# Sửa image tag trong apps/ui/deployment.yml
+# Edit the image tag in apps/<service>/deployment.yml
 vim apps/ui/deployment.yml
 
 git add apps/ui/deployment.yml
@@ -273,7 +296,7 @@ git commit -m "manual: update ui image to <tag>"
 git push origin main
 ```
 
-ArgoCD sẽ tự sync trong 3 phút, hoặc trigger sync ngay bằng:
+ArgoCD will sync within 3 minutes, or you can trigger a sync immediately:
 ```bash
 kubectl patch application retail-store-ui -n argocd \
   --type merge -p '{"operation":{"sync":{}}}'
@@ -281,87 +304,85 @@ kubectl patch application retail-store-ui -n argocd \
 
 ### Rollback
 
-Cực kỳ đơn giản với GitOps — chỉ cần revert commit:
+GitOps makes this trivial — revert the commit:
 
 ```bash
-git revert <commit-hash-của-lần-deploy-lỗi>
+git revert <commit-hash-of-bad-deploy>
 git push origin main
 ```
 
-ArgoCD sẽ tự apply version cũ trong vài phút.
+ArgoCD will apply the previous version within minutes.
 
 ---
 
-## Thêm service mới
+## Adding a New Service
 
-Roadmap hiện tại có 4 service chưa lên: catalog, cart, orders, checkout. Các bước để thêm một service (ví dụ: catalog):
+All 5 services (UI, Catalog, Cart, Orders, Checkout) are currently onboarded. To add a 6th service (e.g., `shipping`):
 
-### Bước 1: Tạo manifest
+### Step 1: Create the manifests
 
 ```bash
-mkdir -p apps/catalog
+mkdir -p apps/shipping
 ```
 
-Tạo 3 file:
+Create two files:
 
-**`apps/catalog/namespace.yml`** — có thể tái dùng namespace `retail-store`, nên bỏ qua nếu đã có.
-
-**`apps/catalog/deployment.yml`**:
+**`apps/shipping/deployment.yml`**:
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: catalog
+  name: shipping
   namespace: retail-store
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: catalog
+      app: shipping
   template:
     metadata:
       labels:
-        app: catalog
+        app: shipping
     spec:
       containers:
-        - name: catalog
-          image: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/catalog:PLACEHOLDER
+        - name: shipping
+          image: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/shipping:PLACEHOLDER
           ports:
             - containerPort: 8080
           # env, resources, probes...
 ```
 
-**`apps/catalog/service.yml`** — có thể dùng `ClusterIP` vì service này chỉ gọi nội bộ từ UI:
+**`apps/shipping/service.yml`** — use `ClusterIP` if it is only called internally:
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: catalog
+  name: shipping
   namespace: retail-store
 spec:
   type: ClusterIP
   selector:
-    app: catalog
+    app: shipping
   ports:
     - port: 80
       targetPort: 8080
 ```
 
-### Bước 2: Tạo ArgoCD Application
+### Step 2: Create the ArgoCD Application
 
-**`argocd/catalog-application.yml`**:
+**`argocd/shipping-application.yml`**:
 ```yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: retail-store-catalog
+  name: retail-store-shipping
   namespace: argocd
 spec:
   project: default
   source:
     repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
     targetRevision: main
-    path: apps/catalog
+    path: apps/shipping
   destination:
     server: https://kubernetes.default.svc
     namespace: retail-store
@@ -371,27 +392,27 @@ spec:
       selfHeal: true
 ```
 
-### Bước 3: Tạo Jenkinsfile cho service
+### Step 3: Create a Jenkinsfile for the service
 
-Trong `retail-store-microservices/src/catalog/Jenkinsfile`, copy từ UI Jenkinsfile và đổi:
-- `ECR_REPO_NAME` = `retail-store/catalog`
-- `sed` target path = `apps/catalog/deployment.yml`
-- Regex pattern = `retail-store/catalog`
+In `retail-store-microservices/src/shipping/Jenkinsfile`, copy an existing one (e.g. `catalog`) and change:
+- `ECR_REPO_NAME` = `retail-store/shipping`
+- `sed` target path = `apps/shipping/deployment.yml`
+- Regex pattern = `retail-store/shipping`
 
-### Bước 4: Apply
+### Step 4: Apply
 
 ```bash
-git add apps/catalog/ argocd/catalog-application.yml
-git commit -m "feat: onboard catalog service"
+git add apps/shipping/ argocd/shipping-application.yml
+git commit -m "feat: onboard shipping service"
 git push origin main
 
-# Apply ArgoCD Application mới
-kubectl apply -f argocd/catalog-application.yml
+# Apply the new ArgoCD Application
+kubectl apply -f argocd/shipping-application.yml
 ```
 
-### (Tương lai) App of Apps pattern
+### (Future) App-of-Apps pattern
 
-Khi có nhiều service, thay vì `kubectl apply` từng Application, tạo một "root" Application quản lý tất cả:
+Instead of applying every Application manually, create a "root" Application that manages all of them:
 
 ```yaml
 # argocd/root-app.yml
@@ -403,7 +424,7 @@ metadata:
 spec:
   source:
     repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
-    path: argocd                     # Folder chứa các Application con
+    path: argocd                     # Folder containing child Applications
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -411,49 +432,36 @@ spec:
     automated: {}
 ```
 
-Sau đó chỉ cần `kubectl apply -f argocd/root-app.yml` **một lần duy nhất** — mọi Application mới thêm vào folder `argocd/` sẽ được tự động onboard.
+After that, `kubectl apply -f argocd/root-app.yml` only once — every new Application added under `argocd/` is onboarded automatically.
 
 ---
 
-## Troubleshooting
+## Cleanup After Each Lab
 
-### ArgoCD hiển thị `OutOfSync`
-- **Nguyên nhân**: Manifest trong Git khác với state trên cluster.
-- **Fix**: Kiểm tra tab `Diff` trong ArgoCD UI. Nếu expected behavior → đợi auto-sync (hoặc click `Sync` thủ công).
+GitOps state itself costs nothing (it is just a Git repo). However, the workloads it manages run on the EKS cluster and consume resources. When you pause the lab, remove the workloads so the LoadBalancers and pods stop consuming AWS resources.
 
-### ArgoCD hiển thị `Degraded` hoặc `Unhealthy`
-- **Nguyên nhân**: Pod không start được (image pull error, crashloop, probe fail...).
-- **Fix**:
-  ```bash
-  kubectl describe pod -n retail-store -l app=ui
-  kubectl logs -n retail-store -l app=ui --tail=50
-  ```
-
-### Jenkins push thành công nhưng ArgoCD không sync
-- **Nguyên nhân**: Polling mặc định 3 phút, hoặc ArgoCD không có webhook.
-- **Fix tạm**: Trigger sync thủ công trong UI.
-- **Fix dài hạn**: Cấu hình GitHub webhook → ArgoCD để sync tức thì (thêm webhook URL `https://<argocd-server>/api/webhook` trong GitHub repo settings).
-
-### `sed` không thay được image trong pipeline
-- **Nguyên nhân hay gặp**: Extension file không khớp (`.yml` vs `.yaml`).
-- **Fix**: Kiểm tra extension thực tế của file trong repo này.
-
-### Không biết URL của UI service
 ```bash
-kubectl get svc ui -n retail-store -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+# 1. Delete all ArgoCD Applications (stops ArgoCD from recreating workloads)
+kubectl delete application --all -n argocd
+
+# 2. Delete the workload namespace (removes pods, services, LoadBalancers)
+kubectl delete namespace retail-store
 ```
-Nếu `<pending>` → đợi 2-4 phút cho AWS provision ELB.
+
+After that, the cluster only runs `kube-system` + `argocd` + optionally `monitoring`. To go further and destroy the cluster itself, see the teardown section in the `infrastructure/README.md`.
+
+> **Tip:** any `LoadBalancer` service (e.g. the UI) provisions an AWS ELB at ~$18/month. Always delete the namespace before pausing the lab.
 
 ---
 
-## Liên kết repo
+## Related repos
 
-| Repo | Vai trò |
-|------|---------|
+| Repo | Role |
+|------|------|
 | [infrastructure](https://github.com/tranduyloc895/infrastructure) | Terraform + Ansible: VPC, EKS, Jenkins, ECR |
-| [retail-store-microservices](https://github.com/tranduyloc895/retail-store-microservices) | Source code 5 microservices + Jenkinsfile |
-| **retail-store-gitops** (this repo) | Manifests K8s + ArgoCD Application |
+| [retail-store-microservices](https://github.com/tranduyloc895/retail-store-microservices) | Source code for the 5 microservices + Jenkinsfile |
+| **retail-store-gitops** (this repo) | K8s manifests + ArgoCD Applications |
 
 ---
 
-> *Đồ án môn NT114 - Đại học Công nghệ Thông tin (UIT)*
+> *NT114 course project — University of Information Technology (UIT)*

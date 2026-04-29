@@ -1,0 +1,44 @@
+# =============================================================================
+# Promtail values (minimal, chart 6.16.0 compatible)
+# Chart: grafana/promtail
+# Purpose: DaemonSet tail /var/log/pods/* và push tới Loki gateway
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Config Promtail process
+# -----------------------------------------------------------------------------
+config:
+  # Endpoint push log — dùng service loki-gateway nội bộ
+  clients:
+    - url: http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push
+
+  # Pipeline parse log (CRI format cho containerd)
+  snippets:
+    pipelineStages:
+      - cri: {}
+
+# -----------------------------------------------------------------------------
+# Resource limit
+# -----------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# -----------------------------------------------------------------------------
+# Tolerations: chạy trên mọi node (kể cả node có taint)
+# -----------------------------------------------------------------------------
+tolerations:
+  - effect: NoSchedule
+    operator: Exists
+
+# -----------------------------------------------------------------------------
+# ServiceMonitor để Prometheus scrape metrics của Promtail
+# TẠMkhoảng thời gian tắt do chart 6.16.0 có bug render service-metrics.yaml.
+# Sau này tạo ServiceMonitor tay qua manifest riêng.
+# -----------------------------------------------------------------------------
+serviceMonitor:
+  enabled: false

@@ -1,0 +1,113 @@
+# =============================================================================
+# Loki values (single-binary mode)
+# Chart: grafana/loki
+# Purpose: Log aggregation cho cluster. Đơn giản — 1 pod, filesystem storage.
+# =============================================================================
+
+deploymentMode: SingleBinary
+
+loki:
+  # Tắt multi-tenancy — chỉ 1 project, không cần
+  auth_enabled: false
+
+  # === Schema & storage config ===
+  commonConfig:
+    # replication_factor=1 — single-binary không replicate
+    replication_factor: 1
+
+  storage:
+    # filesystem = ghi PVC. Alternatives: s3, gcs, azure.
+    type: filesystem
+
+  # === Schema v13 + TSDB (format 2024+) ===
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+  # Giới hạn query để tránh query kiểu "toàn bộ log 30 ngày" làm crash
+  limits_config:
+    retention_period: 168h   # Giữ log 7 ngày (168h). Tăng nếu có storage lớn.
+    max_query_length: 721h
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+
+# -----------------------------------------------------------------------------
+# SingleBinary deployment spec
+# -----------------------------------------------------------------------------
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# -----------------------------------------------------------------------------
+# Tắt tất cả mode khác để tiết kiệm resource
+# Chart mặc định bật SimpleScalable (read/write/backend) — KHÔNG cần
+# -----------------------------------------------------------------------------
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+# Tắt test job — chỉ cần khi CI test chart
+test:
+  enabled: false
+
+# Memcached caching — không cần cho scale nhỏ
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# Gateway (nginx proxy trước Loki)
+# Giữ enabled để Grafana query qua 1 endpoint thống nhất
+# -----------------------------------------------------------------------------
+gateway:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# -----------------------------------------------------------------------------
+# Monitoring self-signal
+# Để Prometheus (của kube-prometheus-stack) scrape metrics của Loki
+# -----------------------------------------------------------------------------
+monitoring:
+  dashboards:
+    enabled: false   # Dashboard Loki import tay sau
+  rules:
+    enabled: false
+  serviceMonitor:
+    enabled: true
+    labels: {}
+
+# Tắt self-monitoring để đỡ tốn resource
+# (chart mặc định cài thêm Loki instance riêng để monitor Loki — overkill)
+lokiCanary:
+  enabled: false
+
+# Không cài Grafana Agent (đã có promtail riêng + kps Prometheus)
+grafana-agent-operator:
+  enabled: false

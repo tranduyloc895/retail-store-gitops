@@ -12,7 +12,7 @@ spec:
     targetRevision: main
     path: platform/monitoring
     directory:
-      include: "storageclass-gp3.yml"
+      include: "storageclass-gp3.yaml"
   destination:
     server: https://kubernetes.default.svc
   syncPolicy:

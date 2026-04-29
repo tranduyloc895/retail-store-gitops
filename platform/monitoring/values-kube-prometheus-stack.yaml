@@ -1,0 +1,157 @@
+# =============================================================================
+# kube-prometheus-stack values
+# Chart: prometheus-community/kube-prometheus-stack
+# Purpose: Override mặc định cho phù hợp EKS t3.large cluster
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PROMETHEUS — TSDB lưu metrics
+# -----------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    retention: 15d
+
+    # Prometheus ngốn RAM theo số series — 2Gi đủ cho ~5 service + system metrics.
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 1000m
+        memory: 4Gi
+
+    # Persistent storage — KHÔNG dùng emptyDir, mất hết khi pod restart.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+    # Cho phép Prometheus scrape ServiceMonitor / PodMonitor ở MỌI namespace,
+    # không chỉ những cái có label "release=kps".
+    # Nếu để true (default), phải gắn label release=kps vào từng ServiceMonitor —
+    # khó bắt khi viết manifest cho app.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+
+# -----------------------------------------------------------------------------
+# ALERTMANAGER — định tuyến alert
+# -----------------------------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+
+# -----------------------------------------------------------------------------
+# GRAFANA — UI
+# -----------------------------------------------------------------------------
+grafana:
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  persistence:
+    enabled: true
+    storageClassName: gp3
+    size: 5Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # === Thêm Loki datasource (Prometheus đã có sẵn) ===
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki-gateway.monitoring.svc.cluster.local
+      isDefault: false
+      editable: false
+
+  # === Sidecar: auto-load dashboards từ ConfigMap có label grafana_dashboard=1 ===
+  # Đây là cơ chế cho phép commit dashboard JSON vào Git như một ConfigMap,
+  # Grafana sẽ tự detect và import mà không cần thao tác UI.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL   # Tìm ConfigMap ở mọi namespace
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+
+    # Auto-load datasources từ ConfigMap có label grafana_datasource=1
+    datasources:
+      enabled: true
+      label: grafana_datasource
+      labelValue: "1"
+      searchNamespace: ALL
+
+# -----------------------------------------------------------------------------
+# NODE EXPORTER — chạy trên mỗi node, expose system metrics (CPU, RAM, Disk)
+# -----------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# -----------------------------------------------------------------------------
+# KUBE-STATE-METRICS — expose K8s object metrics (deployments, pods, PVCs...)
+# -----------------------------------------------------------------------------
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# -----------------------------------------------------------------------------
+# Components tắt để tiết kiệm resource (có thể bật khi cần)
+# -----------------------------------------------------------------------------
+kubeEtcd:
+  enabled: false
+
+# Control plane components của EKS cũng managed
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

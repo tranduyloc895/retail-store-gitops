@@ -18,6 +18,7 @@ This repo is the **source of truth** for the desired state of every workload run
 - [Usage Guide](#usage-guide)
 - [Adding a New Service](#adding-a-new-service)
 - [Cleanup After Each Lab](#cleanup-after-each-lab)
+- [Related repos](#related-repos)
 
 ---
 
@@ -100,15 +101,42 @@ retail-store-gitops/
 │       ├── deployment.yml
 │       └── service.yml                #   ClusterIP
 │
-└── argocd/                            # ArgoCD Application definitions
-    ├── ui-application.yml
-    ├── catalog-application.yml
-    ├── cart-application.yml
-    ├── orders-application.yml
-    └── checkout-application.yml
+├── platform/                          # Platform-level components (non-app workloads)
+│   └── monitoring/                    #   Observability stack (Prometheus + Grafana + Loki + Promtail)
+│       ├── README.md                  #   Full monitoring documentation
+│       ├── namespace.yml              #   Namespace: monitoring
+│       ├── storageclass-gp3.yaml      #   Default StorageClass (gp3, CSI-backed, encrypted)
+│       ├── values-kube-prometheus-stack.yaml
+│       ├── values-loki.yaml
+│       ├── values-promtail.yaml
+│       └── dashboards/
+│           ├── kustomization.yaml     #   Kustomize configMapGenerator for 4 dashboards
+│           ├── node-exporter-full.json
+│           ├── k8s-cluster-monitoring.json
+│           ├── logs-app-loki.json
+│           └── k8s-views-pods.json
+│
+├── argocd/                            # ArgoCD Application definitions
+│   ├── root-application.yml           #   App-of-Apps root (manages all child Applications)
+│   ├── ui-application.yml
+│   ├── catalog-application.yml
+│   ├── cart-application.yml
+│   ├── orders-application.yml
+│   ├── checkout-application.yml
+│   ├── platform-namespace-application.yml      # wave -10
+│   ├── platform-storageclass-application.yml   # wave -5
+│   ├── platform-kps-application.yml            # wave  0  (multi-source)
+│   ├── platform-loki-application.yml           # wave  5  (multi-source)
+│   ├── platform-promtail-application.yml       # wave 10  (multi-source)
+│   └── platform-dashboards-application.yml     # wave 15  (Kustomize)
+│
+└── scripts/
+    └── bootstrap.sh                   # One-shot setup for a fresh cluster
 ```
 
-### Current services
+### Application inventory
+
+**Service Applications** (namespace: `retail-store`)
 
 | Service | Manifest path | ArgoCD Application | Status |
 |---------|---------------|--------------------|--------|
@@ -117,6 +145,17 @@ retail-store-gitops/
 | Cart | `apps/cart/` | `retail-store-cart` | Onboarded |
 | Orders | `apps/orders/` | `retail-store-orders` | Onboarded |
 | Checkout | `apps/checkout/` | `retail-store-checkout` | Onboarded |
+
+**Platform Applications** (namespace: `monitoring`) — deployed in sync-wave order
+
+| Wave | ArgoCD Application | What it deploys |
+|------|--------------------|-----------------|
+| `-10` | `platform-namespace` | `monitoring` namespace |
+| `-5` | `platform-storageclass` | `gp3` StorageClass (default) |
+| `0` | `platform-kube-prometheus-stack` | Prometheus + Grafana + Alertmanager |
+| `5` | `platform-loki` | Loki SingleBinary (log aggregation) |
+| `10` | `platform-promtail` | Promtail DaemonSet (log shipper) |
+| `15` | `platform-dashboards` | 4 Grafana dashboard ConfigMaps (Kustomize) |
 
 ---
 
@@ -160,26 +199,42 @@ spec:
 | `syncPolicy.automated.selfHeal` | Re-apply manifest if the live state deviates from Git |
 | `CreateNamespace=true` | ArgoCD runs `kubectl create ns` automatically if needed |
 
-### First-time apply of ArgoCD Applications
+### First-time apply on a fresh cluster
+
+Use the bootstrap script — it handles namespace creation, the Grafana secret, and the root Application in one shot:
 
 ```bash
 # Connect kubectl to the EKS cluster
 aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
 
-# Apply every Application definition
-kubectl apply -f argocd/
+# Clone this repo (if not already present)
+git clone https://github.com/tranduyloc895/retail-store-gitops.git
+cd retail-store-gitops
 
-# Verify
-kubectl get application -n argocd
-# NAME                    SYNC STATUS   HEALTH STATUS
-# retail-store-ui         Synced        Healthy
-# retail-store-catalog    Synced        Healthy
-# retail-store-cart       Synced        Healthy
-# retail-store-orders     Synced        Healthy
-# retail-store-checkout   Synced        Healthy
+# Run bootstrap — save the Grafana password it prints
+bash scripts/bootstrap.sh
 ```
 
-Afterwards ArgoCD polls the repo every 3 minutes (default) and syncs any new changes automatically.
+Track sync progress:
+
+```bash
+kubectl get application -n argocd -w
+# NAME                              SYNC STATUS   HEALTH STATUS
+# root                              Synced        Healthy
+# retail-store-ui                   Synced        Healthy
+# retail-store-catalog              Synced        Healthy
+# retail-store-cart                 Synced        Healthy
+# retail-store-orders               Synced        Healthy
+# retail-store-checkout             Synced        Healthy
+# platform-namespace                Synced        Healthy
+# platform-storageclass             Synced        Healthy
+# platform-kube-prometheus-stack    Synced        Healthy
+# platform-loki                     Synced        Healthy
+# platform-promtail                 Synced        Healthy
+# platform-dashboards               Synced        Healthy
+```
+
+Afterwards ArgoCD polls the repo every 3 minutes (default) and syncs any new commits automatically.
 
 ---
 
@@ -257,11 +312,11 @@ Repository selected: **only `retail-store-gitops`** (do not grant access to the 
 ### Apply the ArgoCD Applications
 
 ```bash
-# SSH into the Jenkins Agent (or run locally after update-kubeconfig)
+# Connect kubectl to the cluster
 aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
 
-# Apply every Application in one shot
-kubectl apply -f argocd/
+# Run the bootstrap script (creates Grafana secret + applies root Application)
+bash scripts/bootstrap.sh
 
 # Check status
 kubectl get application -n argocd
@@ -410,47 +465,40 @@ git push origin main
 kubectl apply -f argocd/shipping-application.yml
 ```
 
-### (Future) App-of-Apps pattern
+### App-of-Apps pattern (implemented)
 
-Instead of applying every Application manually, create a "root" Application that manages all of them:
+`argocd/root-application.yml` is an ArgoCD Application that watches the entire `argocd/` folder. When ArgoCD syncs the root Application, it discovers and syncs every child Application file in that folder automatically.
 
-```yaml
-# argocd/root-app.yml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: root
-  namespace: argocd
-spec:
-  source:
-    repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
-    path: argocd                     # Folder containing child Applications
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: argocd
-  syncPolicy:
-    automated: {}
+This means **you only need one `kubectl apply`** per fresh cluster:
+
+```bash
+# bootstrap.sh does this for you, but you can also run it manually:
+kubectl apply -f argocd/root-application.yml
 ```
 
-After that, `kubectl apply -f argocd/root-app.yml` only once — every new Application added under `argocd/` is onboarded automatically.
+After that, every new Application file added under `argocd/` is onboarded automatically on the next sync — no more `kubectl apply -f argocd/<new-file>.yml`.
 
 ---
 
 ## Cleanup After Each Lab
 
-GitOps state itself costs nothing (it is just a Git repo). However, the workloads it manages run on the EKS cluster and consume resources. When you pause the lab, remove the workloads so the LoadBalancers and pods stop consuming AWS resources.
+GitOps state itself costs nothing (it is just a Git repo). However, the workloads it manages run on the EKS cluster and consume resources. When you pause the lab, remove the workloads so LoadBalancers, EBS volumes, and pods stop consuming AWS resources.
 
 ```bash
-# 1. Delete all ArgoCD Applications (stops ArgoCD from recreating workloads)
-kubectl delete application --all -n argocd
+# 1. Delete the root Application — ArgoCD cascades and deletes all child Applications
+kubectl delete application root -n argocd
 
-# 2. Delete the workload namespace (removes pods, services, LoadBalancers)
-kubectl delete namespace retail-store
+# 2. Delete workload and monitoring namespaces
+#    - retail-store: removes pods, LoadBalancers (stops ~$18/month ELB charge)
+#    - monitoring: removes pods + PVCs → EBS volumes auto-deleted (reclaimPolicy=Delete)
+kubectl delete namespace retail-store monitoring
 ```
 
-After that, the cluster only runs `kube-system` + `argocd` + optionally `monitoring`. To go further and destroy the cluster itself, see the teardown section in the `infrastructure/README.md`.
+After that, the cluster only runs `kube-system` + `argocd`. To destroy the cluster itself, see the teardown section in `infrastructure/README.md`.
 
-> **Tip:** any `LoadBalancer` service (e.g. the UI) provisions an AWS ELB at ~$18/month. Always delete the namespace before pausing the lab.
+> **Tip:** Any `LoadBalancer` service (e.g. the UI) provisions an AWS ELB at ~$18/month. Always delete the namespace before pausing the lab.
+>
+> **Tip:** The monitoring stack uses ~37 GiB EBS gp3 (~$3/month). Deleting the `monitoring` namespace releases those volumes automatically.
 
 ---
 

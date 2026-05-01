@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: catalog
-          image: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/catalog:9878c8d
+          image: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/catalog:0e86ac3
           ports:
             - containerPort: 8080
           resources:

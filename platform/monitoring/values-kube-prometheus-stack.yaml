@@ -11,14 +11,16 @@ prometheus:
   prometheusSpec:
     retention: 15d
 
-    # Prometheus ngốn RAM theo số series — 2Gi đủ cho ~5 service + system metrics.
+    # Prometheus ngốn RAM theo số series — request 512Mi đủ cho ~5 service ở intern scope.
+    # Cluster 2× t3.large (~13Gi allocatable) đã chạy 5 microservices + ArgoCD + observability stack
+    # → request 2Gi không schedule nổi. 512Mi/1Gi đủ cho TSDB ~15 ngày retention.
     resources:
       requests:
-        cpu: 500m
-        memory: 2Gi
+        cpu: 200m
+        memory: 512Mi
       limits:
         cpu: 1000m
-        memory: 4Gi
+        memory: 1500Mi
 
     # Persistent storage — KHÔNG dùng emptyDir, mất hết khi pod restart.
     storageSpec:

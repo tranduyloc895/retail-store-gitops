@@ -24,5 +24,22 @@ configMapGenerator:
       annotations: { grafana_folder: Kubernetes }
       labels: { grafana_dashboard: "1" }
 
+  # === Phase 3.3: 3 dashboard RED cho 5 microservices ===
+  - name: dashboard-microservices-spring-boot
+    files: [microservices-spring-boot.json]
+    options:
+      annotations: { grafana_folder: Microservices }
+      labels: { grafana_dashboard: "1" }
+  - name: dashboard-microservices-go
+    files: [microservices-go.json]
+    options:
+      annotations: { grafana_folder: Microservices }
+      labels: { grafana_dashboard: "1" }
+  - name: dashboard-microservices-nestjs
+    files: [microservices-nestjs.json]
+    options:
+      annotations: { grafana_folder: Microservices }
+      labels: { grafana_dashboard: "1" }
+
 generatorOptions:
   disableNameSuffixHash: true

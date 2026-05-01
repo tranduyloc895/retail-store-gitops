@@ -79,6 +79,8 @@ resultsCache:
 # Gateway (nginx proxy trước Loki)
 # Giữ enabled để Grafana query qua 1 endpoint thống nhất
 # -----------------------------------------------------------------------------
+# NOTE: Prometheus sẽ scrape gateway và nhận 404 (nginx không expose /metrics).
+# Đây là cosmetic issue của Loki chart — không ảnh hưởng functionality. Bỏ qua.
 gateway:
   enabled: true
   replicas: 1

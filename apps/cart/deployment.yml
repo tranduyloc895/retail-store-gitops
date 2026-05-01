@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: cart
-          image: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/cart:bootstrap
+          image: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/cart:9878c8d
           ports:
             - containerPort: 8080
           resources:

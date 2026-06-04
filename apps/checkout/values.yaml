@@ -1,0 +1,23 @@
+name: checkout
+
+image:
+  repository: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/checkout
+  tag: "e8a9e0f"
+
+resources:
+  requests:
+    cpu: 128m
+    memory: 256Mi
+  limits:
+    cpu: 256m
+    memory: 512Mi
+
+probes:
+  readiness:
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  liveness:
+    path: /health
+    initialDelaySeconds: 45
+    periodSeconds: 15

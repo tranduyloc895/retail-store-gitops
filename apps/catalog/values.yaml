@@ -1,0 +1,5 @@
+name: catalog
+
+image:
+  repository: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/catalog
+  tag: "0e86ac3"

@@ -1,0 +1,29 @@
+name: ui
+
+image:
+  repository: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/ui
+  tag: "9878c8d"
+
+resources:
+  requests:
+    cpu: 256m
+    memory: 512Mi
+  limits:
+    cpu: 512m
+    memory: 1Gi
+
+probes:
+  readiness:
+    path: /actuator/health/readiness
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  liveness:
+    path: /actuator/health/liveness
+    initialDelaySeconds: 60
+    periodSeconds: 15
+
+service:
+  type: LoadBalancer
+
+monitoring:
+  path: /actuator/prometheus

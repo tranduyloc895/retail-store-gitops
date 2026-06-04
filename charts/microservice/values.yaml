@@ -1,0 +1,41 @@
+name: ""
+namespace: retail-store
+
+image:
+  repository: ""
+  tag: "bootstrap"
+  pullPolicy: IfNotPresent
+
+replicas: 2
+containerPort: 8080
+
+resources:
+  requests:
+    cpu: 128m
+    memory: 128Mi
+  limits:
+    cpu: 256m
+    memory: 256Mi
+
+probes:
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  liveness:
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 15
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  portName: http
+
+monitoring:
+  enabled: true
+  path: /metrics
+  interval: 30s
+  scrapeTimeout: 10s
+  release: kps

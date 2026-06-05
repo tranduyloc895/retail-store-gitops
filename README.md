@@ -83,23 +83,28 @@ Developer          Jenkins            ECR             Git (this repo)      ArgoC
 retail-store-gitops/
 ├── README.md
 │
-├── apps/                              # Kubernetes manifests for each service
-│   ├── ui/
-│   │   ├── namespace.yml              #   Namespace: retail-store
-│   │   ├── deployment.yml             #   Deployment (image tag updated by Jenkins)
-│   │   └── service.yml                #   Service type LoadBalancer
-│   ├── catalog/
-│   │   ├── deployment.yml
-│   │   └── service.yml                #   ClusterIP
-│   ├── cart/
-│   │   ├── deployment.yml
-│   │   └── service.yml                #   ClusterIP
-│   ├── orders/
-│   │   ├── deployment.yml
-│   │   └── service.yml                #   ClusterIP
-│   └── checkout/
-│       ├── deployment.yml
-│       └── service.yml                #   ClusterIP
+├── charts/                            # Helm chart — single chart shared by all 5 services
+│   └── microservice/
+│       ├── Chart.yaml
+│       ├── values.yaml                #   Default values (baseline for every service)
+│       └── templates/
+│           ├── _helpers.tpl           #   Shared labels helper
+│           ├── deployment.yaml        #   Deployment template
+│           ├── service.yaml           #   Service template
+│           └── servicemonitor.yaml    #   ServiceMonitor template (conditional)
+│
+├── apps/                              # Per-service config — only the diff vs chart defaults
+│   ├── namespace/
+│   │   └── namespace.yml              #   Namespace: retail-store (own Application, wave -10)
+│   ├── ui/values.yaml                 #   LoadBalancer + Spring Boot probes/metrics
+│   ├── catalog/values.yaml            #   Minimal (matches chart defaults)
+│   ├── cart/values.yaml               #   Spring Boot probes/metrics
+│   ├── orders/values.yaml             #   Spring Boot probes/metrics
+│   └── checkout/values.yaml           #   NestJS probes
+│
+├── environments/                      # Kustomize overlay (scaffold for future per-env patches)
+│   └── dev/
+│       └── kustomization.yaml
 │
 ├── platform/                          # Platform-level components (non-app workloads)
 │   └── monitoring/                    #   Observability stack (Prometheus + Grafana + Loki + Promtail)
@@ -118,11 +123,12 @@ retail-store-gitops/
 │
 ├── argocd/                            # ArgoCD Application definitions
 │   ├── root-application.yml           #   App-of-Apps root (manages all child Applications)
-│   ├── ui-application.yml
-│   ├── catalog-application.yml
-│   ├── cart-application.yml
-│   ├── orders-application.yml
-│   ├── checkout-application.yml
+│   ├── retail-store-namespace-application.yml  # wave -10 (creates retail-store ns)
+│   ├── ui-application.yml             #   multi-source (chart + values)
+│   ├── catalog-application.yml        #   multi-source
+│   ├── cart-application.yml           #   multi-source
+│   ├── orders-application.yml         #   multi-source
+│   ├── checkout-application.yml       #   multi-source
 │   ├── platform-namespace-application.yml      # wave -10
 │   ├── platform-storageclass-application.yml   # wave -5
 │   ├── platform-kps-application.yml            # wave  0  (multi-source)
@@ -134,17 +140,20 @@ retail-store-gitops/
     └── bootstrap.sh                   # One-shot setup for a fresh cluster
 ```
 
+> **Helm refactor (current structure).** The 5 services previously had ~17 duplicated raw YAML files (`deployment.yml` + `service.yml` + `servicemonitor.yml` each). They now share **one Helm chart** (`charts/microservice/`); each service contributes only a small `apps/<svc>/values.yaml` holding the values that differ from the chart defaults. A change to a shared pattern (probe, label, security context) is now a single edit in the chart template instead of five.
+
 ### Application inventory
 
-**Service Applications** (namespace: `retail-store`)
+**Service Applications** (namespace: `retail-store`) — each is a **multi-source** Application: the Helm chart from `charts/microservice/` rendered with `apps/<svc>/values.yaml`.
 
-| Service | Manifest path | ArgoCD Application | Status |
-|---------|---------------|--------------------|--------|
-| UI | `apps/ui/` | `retail-store-ui` | Onboarded |
-| Catalog | `apps/catalog/` | `retail-store-catalog` | Onboarded |
-| Cart | `apps/cart/` | `retail-store-cart` | Onboarded |
-| Orders | `apps/orders/` | `retail-store-orders` | Onboarded |
-| Checkout | `apps/checkout/` | `retail-store-checkout` | Onboarded |
+| Service | Values file | ArgoCD Application | Status |
+|---------|-------------|--------------------|--------|
+| Namespace | `apps/namespace/namespace.yml` | `retail-store-namespace` (wave -10) | Onboarded |
+| UI | `apps/ui/values.yaml` | `retail-store-ui` | Onboarded |
+| Catalog | `apps/catalog/values.yaml` | `retail-store-catalog` | Onboarded |
+| Cart | `apps/cart/values.yaml` | `retail-store-cart` | Onboarded |
+| Orders | `apps/orders/values.yaml` | `retail-store-orders` | Onboarded |
+| Checkout | `apps/checkout/values.yaml` | `retail-store-checkout` | Onboarded |
 
 **Platform Applications** (namespace: `monitoring`) — deployed in sync-wave order
 
@@ -161,7 +170,7 @@ retail-store-gitops/
 
 ## How the ArgoCD Application Works
 
-Every file under `argocd/` defines an ArgoCD `Application` resource. Example (`argocd/ui-application.yml`):
+Every file under `argocd/` defines an ArgoCD `Application` resource. Each service uses the **multi-source pattern**: one source provides the Helm chart, the other provides the values file (referenced via the `$values` alias). Example (`argocd/ui-application.yml`):
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -171,10 +180,19 @@ metadata:
   namespace: argocd
 spec:
   project: default
-  source:
-    repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
-    targetRevision: main
-    path: apps/ui                    # Folder containing the manifests
+  sources:
+    # Source 1: the shared Helm chart
+    - repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
+      targetRevision: main
+      path: charts/microservice
+      helm:
+        releaseName: ui
+        valueFiles:
+          - $values/apps/ui/values.yaml   # values pulled from the $values source below
+    # Source 2: the same repo, exposed as the `values` alias
+    - repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: retail-store
@@ -183,21 +201,28 @@ spec:
       prune: true                    # Remove resources no longer in Git
       selfHeal: true                 # Restore state if someone edits directly on the cluster
     syncOptions:
-      - CreateNamespace=true         # Create the namespace if it does not exist
+      - CreateNamespace=false         # namespace is owned by retail-store-namespace (wave -10)
 ```
 
 ### Field reference
 
 | Field | Meaning |
 |-------|---------|
-| `source.repoURL` | Git repo URL — ArgoCD pulls from here |
-| `source.targetRevision` | Branch/tag/commit to track, here `main` |
-| `source.path` | Folder in the repo containing manifests (not a specific filename) |
+| `sources[].repoURL` | Git repo URL — ArgoCD pulls from here |
+| `sources[].targetRevision` | Branch/tag/commit to track, here `main` |
+| `sources[].path` | Source 1: folder holding the Helm chart (`charts/microservice`) |
+| `sources[].helm.releaseName` | Helm release name (= the service name) |
+| `sources[].helm.valueFiles` | Values file, addressed through the `$values` alias |
+| `sources[].ref: values` | Source 2: exposes the repo as the `$values` alias so the chart source can read the values file |
 | `destination.server` | `kubernetes.default.svc` = the cluster where ArgoCD itself runs |
-| `destination.namespace` | Target namespace for the manifests |
+| `destination.namespace` | Target namespace for the rendered manifests |
 | `syncPolicy.automated.prune` | Delete a K8s resource when its manifest is removed from Git |
 | `syncPolicy.automated.selfHeal` | Re-apply manifest if the live state deviates from Git |
-| `CreateNamespace=true` | ArgoCD runs `kubectl create ns` automatically if needed |
+| `CreateNamespace=false` | The `retail-store` namespace is created by its own Application (`retail-store-namespace`, sync-wave -10), so service Applications must not race to create it |
+
+> **Why a separate namespace Application?** When 5 service Applications sync in parallel, their order is non-deterministic. If each tried to create the `retail-store` namespace inline, one could fail while another is mid-create. A dedicated `retail-store-namespace` Application at sync-wave `-10` guarantees the namespace exists before any service syncs — the same pattern already used for the `monitoring` namespace.
+
+> **Requirement:** the multi-source pattern needs ArgoCD ≥ 2.6 (already satisfied; the monitoring stack uses it too).
 
 ### First-time apply on a fresh cluster
 
@@ -221,6 +246,7 @@ Track sync progress:
 kubectl get application -n argocd -w
 # NAME                              SYNC STATUS   HEALTH STATUS
 # root                              Synced        Healthy
+# retail-store-namespace            Synced        Healthy
 # retail-store-ui                   Synced        Healthy
 # retail-store-catalog              Synced        Healthy
 # retail-store-cart                 Synced        Healthy
@@ -257,12 +283,13 @@ stage('Update GitOps') {
                 git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/tranduyloc895/retail-store-gitops.git gitops-repo
                 cd gitops-repo
 
-                sed -i "s|image:.*retail-store/<service>.*|image: $FULL_IMAGE|" apps/<service>/deployment.yml
-                grep -q "$FULL_IMAGE" apps/<service>/deployment.yml || { echo "sed FAILED"; exit 1; }
+                # Update only the `tag:` line in the service's values.yaml
+                sed -i "s|^\([[:space:]]*tag:\s*\).*|\1\"$IMAGE_TAG\"|" apps/<service>/values.yaml
+                grep -q "tag: \"$IMAGE_TAG\"" apps/<service>/values.yaml || { echo "sed FAILED"; exit 1; }
 
                 git config user.email "jenkins@ci.local"
                 git config user.name "Jenkins CI"
-                git add apps/<service>/deployment.yml
+                git add apps/<service>/values.yaml
                 git diff --staged --quiet || git commit -m "chore(<service>): update image to $IMAGE_TAG"
                 git push origin main
             '''
@@ -277,10 +304,12 @@ stage('Update GitOps') {
 |------|---------|
 | `rm -rf gitops-repo` | Clean leftover workspace |
 | `git clone` with token | Clone via HTTPS using a PAT (no SSH keys needed) |
-| `sed -i "s\|image:...\|"` | Replace the old image line with the new one (tag = commit SHA) |
-| `grep -q "$FULL_IMAGE"` | Verify the replacement actually happened (prevents silent `sed` failures) |
+| `sed -i "s\|...tag:...\|"` | Replace **only the `tag:` value** in `values.yaml` (Helm builds the full image from `repository` + `tag`) |
+| `grep -q "tag: \\"$IMAGE_TAG\\""` | Verify the replacement actually happened (prevents silent `sed` failures) |
 | `git diff --staged --quiet \|\|` | Only commit if something actually changed (idempotent) |
 | `git push origin main` | Push to main — ArgoCD will pick it up within minutes |
+
+> **What changed in the Helm refactor:** Jenkins used to `sed` the full `image:` line in `deployment.yml`. Now it edits a single `tag:` line in `apps/<service>/values.yaml` — a smaller, more deterministic target. The image `repository` is fixed in the values file and never touched by CI.
 
 ### Required Jenkins credential
 
@@ -343,10 +372,10 @@ For a hotfix or a manual test:
 git clone https://github.com/tranduyloc895/retail-store-gitops.git
 cd retail-store-gitops
 
-# Edit the image tag in apps/<service>/deployment.yml
-vim apps/ui/deployment.yml
+# Edit the image.tag value in apps/<service>/values.yaml
+vim apps/ui/values.yaml
 
-git add apps/ui/deployment.yml
+git add apps/ui/values.yaml
 git commit -m "manual: update ui image to <tag>"
 git push origin main
 ```
@@ -372,60 +401,39 @@ ArgoCD will apply the previous version within minutes.
 
 ## Adding a New Service
 
-All 5 services (UI, Catalog, Cart, Orders, Checkout) are currently onboarded. To add a 6th service (e.g., `shipping`):
+All 5 services (UI, Catalog, Cart, Orders, Checkout) are currently onboarded. Thanks to the shared Helm chart, adding a 6th service (e.g., `shipping`) means writing **one values file + one Application file** — no new manifests.
 
-### Step 1: Create the manifests
+### Step 1: Create the values file
 
 ```bash
 mkdir -p apps/shipping
 ```
 
-Create two files:
+**`apps/shipping/values.yaml`** — only the fields that differ from `charts/microservice/values.yaml` (the chart defaults: 2 replicas, ClusterIP, port 8080, `/health` probes, `/metrics` ServiceMonitor):
 
-**`apps/shipping/deployment.yml`**:
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: shipping
-  namespace: retail-store
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: shipping
-  template:
-    metadata:
-      labels:
-        app: shipping
-    spec:
-      containers:
-        - name: shipping
-          image: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/shipping:PLACEHOLDER
-          ports:
-            - containerPort: 8080
-          # env, resources, probes...
+name: shipping
+
+image:
+  repository: <ACCOUNT_ID>.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/shipping
+  tag: "bootstrap"          # Jenkins overwrites this line on each build
+
+# Override only if needed, e.g. for a Spring Boot service:
+# probes:
+#   readiness: { path: /actuator/health/readiness }
+#   liveness:  { path: /actuator/health/liveness }
+# monitoring:
+#   path: /actuator/prometheus
+# service:
+#   type: LoadBalancer       # only if it must be exposed externally
 ```
 
-**`apps/shipping/service.yml`** — use `ClusterIP` if it is only called internally:
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: shipping
-  namespace: retail-store
-spec:
-  type: ClusterIP
-  selector:
-    app: shipping
-  ports:
-    - port: 80
-      targetPort: 8080
-```
+> If the service matches the defaults (Go/NestJS-style: `/health` probes, `/metrics` endpoint, ClusterIP), the file is just `name` + `image`.
 
 ### Step 2: Create the ArgoCD Application
 
-**`argocd/shipping-application.yml`**:
+**`argocd/shipping-application.yml`** — copy an existing one (e.g. `catalog-application.yml`) and change `name`, `releaseName`, and the `valueFiles` path:
+
 ```yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -434,10 +442,17 @@ metadata:
   namespace: argocd
 spec:
   project: default
-  source:
-    repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
-    targetRevision: main
-    path: apps/shipping
+  sources:
+    - repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
+      targetRevision: main
+      path: charts/microservice
+      helm:
+        releaseName: shipping
+        valueFiles:
+          - $values/apps/shipping/values.yaml
+    - repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: retail-store
@@ -445,14 +460,16 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
 ```
 
 ### Step 3: Create a Jenkinsfile for the service
 
 In `retail-store-microservices/src/shipping/Jenkinsfile`, copy an existing one (e.g. `catalog`) and change:
 - `ECR_REPO_NAME` = `retail-store/shipping`
-- `sed` target path = `apps/shipping/deployment.yml`
-- Regex pattern = `retail-store/shipping`
+- `SERVICE_NAME` / `SERVICE_DIR` accordingly
+- `sed` / `git add` target = `apps/shipping/values.yaml` (the `tag:` line)
 
 ### Step 4: Apply
 
@@ -461,7 +478,7 @@ git add apps/shipping/ argocd/shipping-application.yml
 git commit -m "feat: onboard shipping service"
 git push origin main
 
-# Apply the new ArgoCD Application
+# Apply the new ArgoCD Application (or let the root App-of-Apps pick it up)
 kubectl apply -f argocd/shipping-application.yml
 ```
 

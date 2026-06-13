@@ -1,0 +1,12 @@
+# Volume lưu file shared-local-instance.db của DynamoDB-local (gp3 default, mã hóa at-rest).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cart-dynamodb-data
+  namespace: retail-store
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

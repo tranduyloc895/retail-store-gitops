@@ -27,3 +27,10 @@ service:
 
 monitoring:
   path: /actuator/prometheus
+
+# Endpoint 4 service backend (gọi qua Service ClusterIP, port 80).
+env:
+  - {name: RETAIL_UI_ENDPOINTS_CATALOG,  value: "http://catalog:80"}
+  - {name: RETAIL_UI_ENDPOINTS_CARTS,    value: "http://cart:80"}
+  - {name: RETAIL_UI_ENDPOINTS_CHECKOUT, value: "http://checkout:80"}
+  - {name: RETAIL_UI_ENDPOINTS_ORDERS,   value: "http://orders:80"}

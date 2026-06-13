@@ -1,0 +1,12 @@
+# Volume lưu dump.rdb của Redis (gp3 default, mã hóa at-rest).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: checkout-redis-data
+  namespace: retail-store
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

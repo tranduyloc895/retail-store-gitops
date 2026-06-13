@@ -3,3 +3,15 @@ name: catalog
 image:
   repository: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/catalog
   tag: "0e86ac3"
+
+# Kết nối MariaDB dùng chung; service tự AutoMigrate + seed sản phẩm khi khởi động.
+env:
+  - {name: RETAIL_CATALOG_PERSISTENCE_PROVIDER, value: "mysql"}
+  - {name: RETAIL_CATALOG_PERSISTENCE_ENDPOINT, value: "catalog-mysql:3306"}
+  - {name: RETAIL_CATALOG_PERSISTENCE_DB_NAME,  value: "catalogdb"}
+  - {name: RETAIL_CATALOG_PERSISTENCE_USER,     value: "catalog_user"}
+  - name: RETAIL_CATALOG_PERSISTENCE_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: catalog-mysql-secret
+        key: password

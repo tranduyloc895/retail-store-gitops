@@ -24,3 +24,14 @@ probes:
 
 monitoring:
   path: /actuator/prometheus
+
+# Kết nối DynamoDB-local dùng chung; service tự tạo bảng (create-table=true).
+# AWS_* là giá trị dummy cho AWS SDK (DynamoDB-local không xác thực thật).
+env:
+  - {name: RETAIL_CART_PERSISTENCE_PROVIDER, value: "dynamodb"}
+  - {name: RETAIL_CART_PERSISTENCE_DYNAMODB_ENDPOINT, value: "http://cart-dynamodb:8000"}
+  - {name: RETAIL_CART_PERSISTENCE_DYNAMODB_CREATE_TABLE, value: "true"}
+  - {name: RETAIL_CART_PERSISTENCE_DYNAMODB_TABLE_NAME, value: "Items"}
+  - {name: AWS_REGION, value: "us-east-1"}
+  - {name: AWS_ACCESS_KEY_ID, value: "dummy"}
+  - {name: AWS_SECRET_ACCESS_KEY, value: "dummy"}

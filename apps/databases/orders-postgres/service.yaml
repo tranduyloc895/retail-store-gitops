@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-postgres
+  namespace: retail-store
+  labels:
+    app: orders-postgres
+    app.kubernetes.io/part-of: retail-store
+spec:
+  type: ClusterIP
+  selector:
+    app: orders-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP

@@ -13,6 +13,7 @@ This repo is the **source of truth** for the desired state of every workload run
 - [What GitOps Is and Why We Use It](#what-gitops-is-and-why-we-use-it)
 - [Deployment Flow Architecture](#deployment-flow-architecture)
 - [Directory Structure](#directory-structure)
+- [Databases (Persistent Datastores)](#databases-persistent-datastores)
 - [How the ArgoCD Application Works](#how-the-argocd-application-works)
 - [CI/CD Flow with Jenkins](#cicd-flow-with-jenkins)
 - [Usage Guide](#usage-guide)
@@ -89,18 +90,23 @@ retail-store-gitops/
 │       ├── values.yaml                #   Default values (baseline for every service)
 │       └── templates/
 │           ├── _helpers.tpl           #   Shared labels helper
-│           ├── deployment.yaml        #   Deployment template
+│           ├── deployment.yaml        #   Deployment template (supports an env list)
 │           ├── service.yaml           #   Service template
 │           └── servicemonitor.yaml    #   ServiceMonitor template (conditional)
 │
 ├── apps/                              # Per-service config — only the diff vs chart defaults
 │   ├── namespace/
 │   │   └── namespace.yml              #   Namespace: retail-store (own Application, wave -10)
-│   ├── ui/values.yaml                 #   LoadBalancer + Spring Boot probes/metrics
-│   ├── catalog/values.yaml            #   Minimal (matches chart defaults)
-│   ├── cart/values.yaml               #   Spring Boot probes/metrics
-│   ├── orders/values.yaml             #   Spring Boot probes/metrics
-│   └── checkout/values.yaml           #   NestJS probes
+│   ├── databases/                     #   4 shared datastores (own Application, wave -5)
+│   │   ├── catalog-mysql/             #     MariaDB     — Deployment + Service + PVC + Secret
+│   │   ├── cart-dynamodb/             #     DynamoDB-local — Deployment + Service + PVC
+│   │   ├── orders-postgres/           #     PostgreSQL  — Deployment + Service + PVC + Secret
+│   │   └── checkout-redis/            #     Redis       — Deployment + Service + PVC
+│   ├── ui/values.yaml                 #   LoadBalancer + probes/metrics + backend endpoints (env)
+│   ├── catalog/values.yaml            #   MySQL persistence (env + secretKeyRef)
+│   ├── cart/values.yaml               #   Spring Boot probes/metrics + DynamoDB persistence (env)
+│   ├── orders/values.yaml             #   Spring Boot probes/metrics + Postgres persistence (env + secretKeyRef)
+│   └── checkout/values.yaml           #   NestJS probes + Redis persistence (env)
 │
 ├── environments/                      # Kustomize overlay (scaffold for future per-env patches)
 │   └── dev/
@@ -124,6 +130,7 @@ retail-store-gitops/
 ├── argocd/                            # ArgoCD Application definitions
 │   ├── root-application.yml           #   App-of-Apps root (manages all child Applications)
 │   ├── retail-store-namespace-application.yml  # wave -10 (creates retail-store ns)
+│   ├── retail-store-databases-application.yml  # wave  -5 (4 datastores, directory recurse)
 │   ├── ui-application.yml             #   multi-source (chart + values)
 │   ├── catalog-application.yml        #   multi-source
 │   ├── cart-application.yml           #   multi-source
@@ -149,6 +156,7 @@ retail-store-gitops/
 | Service | Values file | ArgoCD Application | Status |
 |---------|-------------|--------------------|--------|
 | Namespace | `apps/namespace/namespace.yml` | `retail-store-namespace` (wave -10) | Onboarded |
+| Databases | `apps/databases/` | `retail-store-databases` (wave -5) | Onboarded |
 | UI | `apps/ui/values.yaml` | `retail-store-ui` | Onboarded |
 | Catalog | `apps/catalog/values.yaml` | `retail-store-catalog` | Onboarded |
 | Cart | `apps/cart/values.yaml` | `retail-store-cart` | Onboarded |
@@ -165,6 +173,53 @@ retail-store-gitops/
 | `5` | `platform-loki` | Loki SingleBinary (log aggregation) |
 | `10` | `platform-promtail` | Promtail DaemonSet (log shipper) |
 | `15` | `platform-dashboards` | 4 Grafana dashboard ConfigMaps (Kustomize) |
+
+---
+
+## Databases (Persistent Datastores)
+
+Four services persist state. With **2 replicas each**, in-memory storage would diverge per pod, so each writing service is wired to a **shared external datastore** running in the cluster. The `retail-store-databases` Application (sync-wave `-5`) brings them up **after** the namespace (`-10`) and **before** the services (default wave `0`), so a datastore is `Healthy` before the service that depends on it syncs.
+
+| Service | Datastore | Image | Service:port | Schema/data setup |
+|---------|-----------|-------|--------------|-------------------|
+| catalog (Go) | MariaDB | `mariadb:11` | `catalog-mysql:3306` | Service auto-migrates + seeds products/tags on startup |
+| cart (Spring) | DynamoDB-local | `amazon/dynamodb-local` | `cart-dynamodb:8000` | Service creates the table (`create-table=true`) |
+| orders (Spring) | PostgreSQL | `postgres:16` | `orders-postgres:5432` | Service runs Flyway (`baseline-on-migrate=true`) |
+| checkout (NestJS) | Redis | `redis:7` | `checkout-redis:6379` | No schema (key-value session store) |
+
+> **No manual SQL seeding.** Each service builds its own schema and data on first boot — the datastores only need to exist empty with credentials. **No message broker either:** orders defaults `messaging.provider=in-memory` and excludes `RabbitAutoConfiguration`, so the checkout → create-order flow works without RabbitMQ.
+
+### How the wiring works
+
+The shared Helm chart now renders an optional `env` list (`charts/microservice/templates/deployment.yaml`). Each service declares its connection settings in `apps/<svc>/values.yaml`:
+
+```yaml
+# apps/orders/values.yaml (excerpt)
+env:
+  - {name: RETAIL_ORDERS_PERSISTENCE_PROVIDER, value: "postgres"}
+  - {name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_ENDPOINT, value: "orders-postgres:5432"}
+  - {name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_DBNAME,   value: "ordersdb"}
+  - {name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_USERNAME, value: "orders_user"}
+  - name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_PASSWORD     # password from a Secret, never in values.yaml
+    valueFrom:
+      secretKeyRef:
+        name: orders-postgres-secret
+        key: password
+```
+
+The `ui` service receives the four backend endpoints the same way (`RETAIL_UI_ENDPOINTS_CATALOG/CARTS/CHECKOUT/ORDERS` → `http://<svc>:80`).
+
+### Design notes
+
+| Decision | Why |
+|----------|-----|
+| `strategy: Recreate` on every datastore Deployment | PVCs are `ReadWriteOnce`; Recreate avoids two pods mounting the same EBS volume during a rollout |
+| Passwords in a `Secret` (`catalog-mysql-secret`, `orders-postgres-secret`) | Keeps plaintext out of `values.yaml`; encrypted at rest in etcd via the cluster's KMS envelope encryption. External Secrets Operator is a documented next step. |
+| PostgreSQL `PGDATA` set to a subdirectory | Avoids the `initdb` "directory not empty" error caused by `lost+found` on a fresh ext4 EBS volume |
+| DynamoDB-local pod `securityContext.fsGroup: 1000` | The image runs as a non-root user; fsGroup makes the mounted EBS volume writable |
+| `directory.recurse: true` on the databases Application | Manifests live in per-datastore subfolders under `apps/databases/` |
+
+> **Scope note:** DynamoDB-local stands in for AWS DynamoDB so the cart works in a self-contained cluster; the cart pod still needs dummy `AWS_REGION`/`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` values because the AWS SDK requires them even against a local endpoint. Redis runs without auth (demo scope).
 
 ---
 
@@ -507,6 +562,7 @@ kubectl delete application root -n argocd
 
 # 2. Delete workload and monitoring namespaces
 #    - retail-store: removes pods, LoadBalancers (stops ~$18/month ELB charge)
+#                    + the 4 database PVCs → EBS volumes auto-deleted (reclaimPolicy=Delete)
 #    - monitoring: removes pods + PVCs → EBS volumes auto-deleted (reclaimPolicy=Delete)
 kubectl delete namespace retail-store monitoring
 ```

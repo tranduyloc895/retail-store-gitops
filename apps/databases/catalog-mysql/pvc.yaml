@@ -1,0 +1,12 @@
+# Volume lưu dữ liệu MariaDB (gp3 default StorageClass, mã hóa at-rest).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: catalog-mysql-data
+  namespace: retail-store
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

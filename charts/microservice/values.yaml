@@ -9,6 +9,10 @@ image:
 replicas: 2
 containerPort: 8080
 
+# Biến môi trường truyền vào container (dạng list để hỗ trợ cả value lẫn
+# valueFrom.secretKeyRef). Mỗi service override trong apps/<svc>/values.yaml.
+env: []
+
 resources:
   requests:
     cpu: 128m

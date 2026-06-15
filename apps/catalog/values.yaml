@@ -2,7 +2,7 @@ name: catalog
 
 image:
   repository: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/catalog
-  tag: "a5e0c43"
+  tag: "9b76f74"
 
 # Kết nối MariaDB dùng chung; service tự AutoMigrate + seed sản phẩm khi khởi động.
 env:

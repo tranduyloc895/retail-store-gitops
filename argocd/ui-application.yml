@@ -25,3 +25,10 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=false
+  # HPA quản lý spec.replicas của Deployment ui; bỏ qua field này để selfHeal
+  # không kéo về giá trị cố định (an toàn kép cùng với việc chart bỏ replicas khi hpa.enabled).
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

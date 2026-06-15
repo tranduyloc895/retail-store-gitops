@@ -1,0 +1,11 @@
+# metrics-server — cung cấp Resource Metrics API (CPU/memory) cho HPA.
+# kube-prometheus-stack KHÔNG kèm metrics-server, nên cần triển khai riêng.
+# Trên EKS chạy được với cấu hình mặc định (kubelet expose metrics qua cert hợp lệ);
+# nếu pod báo lỗi scrape TLS thì thêm arg --kubelet-insecure-tls.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi

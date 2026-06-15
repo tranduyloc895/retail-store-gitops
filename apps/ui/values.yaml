@@ -34,3 +34,12 @@ env:
   - {name: RETAIL_UI_ENDPOINTS_CARTS,    value: "http://cart:80"}
   - {name: RETAIL_UI_ENDPOINTS_CHECKOUT, value: "http://checkout:80"}
   - {name: RETAIL_UI_ENDPOINTS_ORDERS,   value: "http://orders:80"}
+
+# Tự co giãn số pod UI theo CPU (cần metrics-server). Khi bật, chart không render
+# replicas; HPA giữ trong khoảng min–max. Kết hợp Cluster Autoscaler: pod tăng ->
+# nếu hết chỗ thì CA thêm node.
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60

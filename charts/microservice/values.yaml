@@ -13,6 +13,15 @@ containerPort: 8080
 # valueFrom.secretKeyRef). Mỗi service override trong apps/<svc>/values.yaml.
 env: []
 
+# HorizontalPodAutoscaler. Mặc định tắt; service nào cần thì bật trong
+# apps/<svc>/values.yaml. Khi enabled=true, Deployment KHÔNG render field
+# replicas nữa (để HPA toàn quyền quản lý, tránh ArgoCD selfHeal kéo về cố định).
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+
 resources:
   requests:
     cpu: 128m

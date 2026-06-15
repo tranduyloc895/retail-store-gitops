@@ -1,0 +1,33 @@
+# metrics-server — Resource Metrics API (CPU/memory) cho HorizontalPodAutoscaler.
+# Multi-source: chart upstream + values trong gitops.
+# sync-wave -5: lên cùng nhóm hạ tầng, trước các workload (wave 0) để HPA có metric.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-metrics-server
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  project: default
+  sources:
+    - repoURL: https://kubernetes-sigs.github.io/metrics-server/
+      chart: metrics-server
+      targetRevision: 3.12.2
+      helm:
+        releaseName: metrics-server
+        valueFiles:
+          - $values/platform/metrics-server/values.yaml
+    - repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=false      # kube-system luôn tồn tại
+    retry:
+      limit: 5
+      backoff: { duration: 30s, maxDuration: 5m, factor: 2 }

@@ -1,0 +1,38 @@
+# Values cho Helm chart cluster-autoscaler (repo kubernetes.github.io/autoscaler).
+# CA tự nâng/hạ desired_size của ASG node group "main_nodes" trong khoảng
+# min(2)–max(4) khi có pod Pending vì thiếu CPU/memory (đúng sự cố Prometheus đã gặp).
+
+# Auto-discovery: EKS managed node group tự gắn tag k8s.io/cluster-autoscaler/<cluster>
+# lên ASG, nên chỉ cần khai báo tên cluster là CA tìm thấy node group.
+autoDiscovery:
+  clusterName: ecommerce-cluster
+
+awsRegion: ap-southeast-1
+
+# Image CA phải khớp minor version của cluster (EKS 1.31 -> CA v1.31.x).
+image:
+  tag: v1.31.0
+
+# Service account gắn IRSA role (tạo ở infrastructure/02-cluster-eks/irsa-cluster-autoscaler.tf).
+rbac:
+  serviceAccount:
+    name: cluster-autoscaler
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::736508008585:role/ecommerce-cluster-cluster-autoscaler
+
+extraArgs:
+  balance-similar-node-groups: true
+  # Cho phép scale-down kể cả node có system pod (non-DaemonSet) — cần thiết để
+  # cluster nhỏ thật sự giảm được node khi rảnh tải.
+  skip-nodes-with-system-pods: false
+  scale-down-enabled: true
+  scale-down-unneeded-time: 5m
+  scale-down-delay-after-add: 5m
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 100m
+    memory: 256Mi

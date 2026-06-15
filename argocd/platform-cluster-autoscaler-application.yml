@@ -1,0 +1,33 @@
+# Cluster Autoscaler — tự thêm/bớt node EC2 khi pod không schedule được vì thiếu chỗ.
+# Multi-source: chart upstream + values trong gitops (giống stack monitoring).
+# sync-wave -5: lên sớm để sẵn sàng cấp node trước khi các workload (wave 0) sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-cluster-autoscaler
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  project: default
+  sources:
+    - repoURL: https://kubernetes.github.io/autoscaler
+      chart: cluster-autoscaler
+      targetRevision: 9.37.0
+      helm:
+        releaseName: cluster-autoscaler
+        valueFiles:
+          - $values/platform/cluster-autoscaler/values.yaml
+    - repoURL: https://github.com/tranduyloc895/retail-store-gitops.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=false      # kube-system luôn tồn tại
+    retry:
+      limit: 5
+      backoff: { duration: 30s, maxDuration: 5m, factor: 2 }

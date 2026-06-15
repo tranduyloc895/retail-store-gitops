@@ -15,6 +15,7 @@ This repo is the **source of truth** for the desired state of every workload run
 - [Directory Structure](#directory-structure)
 - [Databases (Persistent Datastores)](#databases-persistent-datastores)
 - [Node Autoscaling (Cluster Autoscaler)](#node-autoscaling-cluster-autoscaler)
+- [Pod Autoscaling (HPA)](#pod-autoscaling-hpa)
 - [How the ArgoCD Application Works](#how-the-argocd-application-works)
 - [CI/CD Flow with Jenkins](#cicd-flow-with-jenkins)
 - [Usage Guide](#usage-guide)
@@ -91,9 +92,10 @@ retail-store-gitops/
 │       ├── values.yaml                #   Default values (baseline for every service)
 │       └── templates/
 │           ├── _helpers.tpl           #   Shared labels helper
-│           ├── deployment.yaml        #   Deployment template (supports an env list)
+│           ├── deployment.yaml        #   Deployment template (env list; omits replicas when HPA on)
 │           ├── service.yaml           #   Service template
-│           └── servicemonitor.yaml    #   ServiceMonitor template (conditional)
+│           ├── servicemonitor.yaml    #   ServiceMonitor template (conditional)
+│           └── hpa.yaml               #   HorizontalPodAutoscaler (conditional, hpa.enabled)
 │
 ├── apps/                              # Per-service config — only the diff vs chart defaults
 │   ├── namespace/
@@ -127,8 +129,10 @@ retail-store-gitops/
 │   │       ├── k8s-cluster-monitoring.json
 │   │       ├── logs-app-loki.json
 │   │       └── k8s-views-pods.json
-│   └── cluster-autoscaler/            #   Node autoscaling (scales the EKS node group)
-│       └── values.yaml                #     Helm values (autoDiscovery + IRSA SA annotation)
+│   ├── cluster-autoscaler/            #   Node autoscaling (scales the EKS node group)
+│   │   └── values.yaml                #     Helm values (autoDiscovery + IRSA SA annotation)
+│   └── metrics-server/                #   Resource Metrics API (CPU/mem) — required by HPA
+│       └── values.yaml                #     Helm values (resources)
 │
 ├── argocd/                            # ArgoCD Application definitions
 │   ├── root-application.yml           #   App-of-Apps root (manages all child Applications)
@@ -142,6 +146,7 @@ retail-store-gitops/
 │   ├── platform-namespace-application.yml      # wave -10
 │   ├── platform-storageclass-application.yml   # wave -5
 │   ├── platform-cluster-autoscaler-application.yml # wave -5  (node autoscaling, kube-system)
+│   ├── platform-metrics-server-application.yml    # wave -5  (Resource Metrics API for HPA)
 │   ├── platform-kps-application.yml            # wave  0  (multi-source)
 │   ├── platform-loki-application.yml           # wave  5  (multi-source)
 │   ├── platform-promtail-application.yml       # wave 10  (multi-source)
@@ -174,6 +179,7 @@ retail-store-gitops/
 | `-10` | `platform-namespace` | `monitoring` namespace |
 | `-5` | `platform-storageclass` | `gp3` StorageClass (default) |
 | `-5` | `platform-cluster-autoscaler` | Cluster Autoscaler — node autoscaling (`kube-system`) |
+| `-5` | `platform-metrics-server` | metrics-server — Resource Metrics API for HPA (`kube-system`) |
 | `0` | `platform-kube-prometheus-stack` | Prometheus + Grafana + Alertmanager |
 | `5` | `platform-loki` | Loki SingleBinary (log aggregation) |
 | `10` | `platform-promtail` | Promtail DaemonSet (log shipper) |
@@ -247,6 +253,41 @@ The node group is fixed-size by default, but a **Cluster Autoscaler** (CA) is de
 The four database pods carry the annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`. Without it, CA could drain a node running a database during scale-down and restart the pod (brief downtime). The annotation tells CA to leave those nodes alone, keeping the datastores stable.
 
 > **Note on node sizing:** `node_desired_size` / `node_max_size` live in Terraform (`02-cluster-eks`). The module sets `ignore_changes` on `desired_size` (it expects CA to manage it at runtime), so on an already-running cluster the live node count is owned by CA — `terraform apply` only sets `desired_size` on a fresh cluster. `max_size` is **not** ignored, so raising the ceiling (e.g. 3 → 4) does apply to a running cluster.
+
+---
+
+## Pod Autoscaling (HPA)
+
+Where Cluster Autoscaler scales **nodes**, a **HorizontalPodAutoscaler** (HPA) scales **pods**. The two are complementary: under load HPA adds replicas, and if those replicas no longer fit, CA adds a node.
+
+HPA is built into the shared chart and toggled per service. It is **off by default** and currently enabled for **UI** only (`apps/ui/values.yaml`):
+
+```yaml
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+```
+
+When `hpa.enabled: true`, the chart renders a `HorizontalPodAutoscaler` (`templates/hpa.yaml`) and **omits `spec.replicas`** from the Deployment so HPA fully owns the replica count.
+
+**Prerequisite — metrics-server.** HPA reads CPU/memory from the Resource Metrics API, which kube-prometheus-stack does not provide. It is deployed as `platform-metrics-server` (`platform/metrics-server/values.yaml`, sync-wave -5). Verify with `kubectl top nodes`. If the metrics-server pod crashloops with a TLS scrape error, add `--kubelet-insecure-tls` to its args.
+
+### Avoiding the ArgoCD ↔ HPA replicas fight
+
+When HPA changes a Deployment's replica count at runtime, a GitOps controller with self-heal can try to revert it. This repo guards against that **two ways**:
+
+1. The chart **omits `spec.replicas`** entirely when `hpa.enabled` — nothing for ArgoCD to enforce.
+2. The UI Application adds `ignoreDifferences` on `/spec/replicas` (belt-and-suspenders).
+
+### Demonstrating load-based scaling
+
+```bash
+hey -z 3m -c 50 http://<ui-loadbalancer>/      # generate load on UI
+kubectl get hpa -n retail-store -w             # watch UI replicas climb toward maxReplicas
+kubectl get nodes -w                           # if pods don't fit, CA adds a 4th node
+```
 
 ---
 

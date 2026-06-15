@@ -14,6 +14,7 @@ This repo is the **source of truth** for the desired state of every workload run
 - [Deployment Flow Architecture](#deployment-flow-architecture)
 - [Directory Structure](#directory-structure)
 - [Databases (Persistent Datastores)](#databases-persistent-datastores)
+- [Node Autoscaling (Cluster Autoscaler)](#node-autoscaling-cluster-autoscaler)
 - [How the ArgoCD Application Works](#how-the-argocd-application-works)
 - [CI/CD Flow with Jenkins](#cicd-flow-with-jenkins)
 - [Usage Guide](#usage-guide)
@@ -113,19 +114,21 @@ retail-store-gitops/
 │       └── kustomization.yaml
 │
 ├── platform/                          # Platform-level components (non-app workloads)
-│   └── monitoring/                    #   Observability stack (Prometheus + Grafana + Loki + Promtail)
-│       ├── README.md                  #   Full monitoring documentation
-│       ├── namespace.yml              #   Namespace: monitoring
-│       ├── storageclass-gp3.yaml      #   Default StorageClass (gp3, CSI-backed, encrypted)
-│       ├── values-kube-prometheus-stack.yaml
-│       ├── values-loki.yaml
-│       ├── values-promtail.yaml
-│       └── dashboards/
-│           ├── kustomization.yaml     #   Kustomize configMapGenerator for 4 dashboards
-│           ├── node-exporter-full.json
-│           ├── k8s-cluster-monitoring.json
-│           ├── logs-app-loki.json
-│           └── k8s-views-pods.json
+│   ├── monitoring/                    #   Observability stack (Prometheus + Grafana + Loki + Promtail)
+│   │   ├── README.md                  #   Full monitoring documentation
+│   │   ├── namespace.yml              #   Namespace: monitoring
+│   │   ├── storageclass-gp3.yaml      #   Default StorageClass (gp3, CSI-backed, encrypted)
+│   │   ├── values-kube-prometheus-stack.yaml
+│   │   ├── values-loki.yaml
+│   │   ├── values-promtail.yaml
+│   │   └── dashboards/
+│   │       ├── kustomization.yaml     #   Kustomize configMapGenerator for 4 dashboards
+│   │       ├── node-exporter-full.json
+│   │       ├── k8s-cluster-monitoring.json
+│   │       ├── logs-app-loki.json
+│   │       └── k8s-views-pods.json
+│   └── cluster-autoscaler/            #   Node autoscaling (scales the EKS node group)
+│       └── values.yaml                #     Helm values (autoDiscovery + IRSA SA annotation)
 │
 ├── argocd/                            # ArgoCD Application definitions
 │   ├── root-application.yml           #   App-of-Apps root (manages all child Applications)
@@ -138,6 +141,7 @@ retail-store-gitops/
 │   ├── checkout-application.yml       #   multi-source
 │   ├── platform-namespace-application.yml      # wave -10
 │   ├── platform-storageclass-application.yml   # wave -5
+│   ├── platform-cluster-autoscaler-application.yml # wave -5  (node autoscaling, kube-system)
 │   ├── platform-kps-application.yml            # wave  0  (multi-source)
 │   ├── platform-loki-application.yml           # wave  5  (multi-source)
 │   ├── platform-promtail-application.yml       # wave 10  (multi-source)
@@ -163,12 +167,13 @@ retail-store-gitops/
 | Orders | `apps/orders/values.yaml` | `retail-store-orders` | Onboarded |
 | Checkout | `apps/checkout/values.yaml` | `retail-store-checkout` | Onboarded |
 
-**Platform Applications** (namespace: `monitoring`) — deployed in sync-wave order
+**Platform Applications** — deployed in sync-wave order
 
 | Wave | ArgoCD Application | What it deploys |
 |------|--------------------|-----------------|
 | `-10` | `platform-namespace` | `monitoring` namespace |
 | `-5` | `platform-storageclass` | `gp3` StorageClass (default) |
+| `-5` | `platform-cluster-autoscaler` | Cluster Autoscaler — node autoscaling (`kube-system`) |
 | `0` | `platform-kube-prometheus-stack` | Prometheus + Grafana + Alertmanager |
 | `5` | `platform-loki` | Loki SingleBinary (log aggregation) |
 | `10` | `platform-promtail` | Promtail DaemonSet (log shipper) |
@@ -220,6 +225,28 @@ The `ui` service receives the four backend endpoints the same way (`RETAIL_UI_EN
 | `directory.recurse: true` on the databases Application | Manifests live in per-datastore subfolders under `apps/databases/` |
 
 > **Scope note:** DynamoDB-local stands in for AWS DynamoDB so the cart works in a self-contained cluster; the cart pod still needs dummy `AWS_REGION`/`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` values because the AWS SDK requires them even against a local endpoint. Redis runs without auth (demo scope).
+
+---
+
+## Node Autoscaling (Cluster Autoscaler)
+
+The node group is fixed-size by default, but a **Cluster Autoscaler** (CA) is deployed so the node count follows demand. When a pod cannot be scheduled because no node has enough free CPU/memory, CA raises the node group's desired capacity (within `min=2 … max=4`); when nodes sit underutilized, it scales back down.
+
+| Item | Value |
+|------|-------|
+| Application | `platform-cluster-autoscaler` (sync-wave -5, namespace `kube-system`) |
+| Chart | `cluster-autoscaler` (kubernetes.github.io/autoscaler), image pinned to `v1.31.0` (matches EKS 1.31) |
+| Values | `platform/cluster-autoscaler/values.yaml` |
+| Node discovery | `autoDiscovery.clusterName` — EKS managed node groups auto-tag their ASG with `k8s.io/cluster-autoscaler/<cluster>`, so no manual ASG tagging is needed |
+| AWS permissions | IRSA role `ecommerce-cluster-cluster-autoscaler` (Terraform, module `02-cluster-eks`), bound to SA `kube-system:cluster-autoscaler` |
+
+> **Why it exists:** during bring-up the Prometheus pod once stayed `Pending` with `Insufficient cpu` because the two original nodes were full. CA automates the fix (add a node) instead of manually running `aws eks update-nodegroup-config`.
+
+### Databases are protected from scale-down
+
+The four database pods carry the annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`. Without it, CA could drain a node running a database during scale-down and restart the pod (brief downtime). The annotation tells CA to leave those nodes alone, keeping the datastores stable.
+
+> **Note on node sizing:** `node_desired_size` / `node_max_size` live in Terraform (`02-cluster-eks`). The module sets `ignore_changes` on `desired_size` (it expects CA to manage it at runtime), so on an already-running cluster the live node count is owned by CA — `terraform apply` only sets `desired_size` on a fresh cluster. `max_size` is **not** ignored, so raising the ceiling (e.g. 3 → 4) does apply to a running cluster.
 
 ---
 

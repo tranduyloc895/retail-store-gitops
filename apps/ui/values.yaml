@@ -2,7 +2,7 @@ name: ui
 
 image:
   repository: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/ui
-  tag: "eafeee6"
+  tag: "392c53c"
 
 resources:
   requests:

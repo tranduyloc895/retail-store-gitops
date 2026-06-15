@@ -22,6 +22,9 @@ spec:
     metadata:
       labels:
         app: cart-dynamodb
+      annotations:
+        # Không cho Cluster Autoscaler evict pod DB khi scale-down (tránh restart DB).
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       securityContext:
         fsGroup: 1000

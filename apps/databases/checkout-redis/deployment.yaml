@@ -20,6 +20,9 @@ spec:
     metadata:
       labels:
         app: checkout-redis
+      annotations:
+        # Không cho Cluster Autoscaler evict pod DB khi scale-down (tránh restart DB).
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       containers:
         - name: redis

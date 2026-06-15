@@ -21,6 +21,9 @@ spec:
     metadata:
       labels:
         app: orders-postgres
+      annotations:
+        # Không cho Cluster Autoscaler evict pod DB khi scale-down (tránh restart DB).
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       containers:
         - name: postgres

@@ -46,6 +46,11 @@ prometheus:
 # -----------------------------------------------------------------------------
 alertmanager:
   alertmanagerSpec:
+    # Mount Secret chứa Telegram bot token vào
+    # /etc/alertmanager/secrets/telegram-alertmanager-secret/bot-token
+    # Secret tạo out-of-band (không commit token vào Git) — xem README.
+    secrets:
+      - telegram-alertmanager-secret
     resources:
       requests:
         cpu: 50m
@@ -61,6 +66,40 @@ alertmanager:
           resources:
             requests:
               storage: 2Gi
+
+  # Định tuyến: CHỈ alert demo (label channel=telegram) gửi Telegram; toàn bộ
+  # alert mặc định của kube-prometheus-stack -> receiver 'null' (tránh spam).
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: 'null'
+      group_by: ['alertname']
+      group_wait: 30s
+      group_interval: 1m
+      repeat_interval: 4h
+      routes:
+        - receiver: 'null'
+          matchers:
+            - alertname = "Watchdog"
+        - receiver: 'telegram'
+          matchers:
+            - channel = "telegram"
+          group_wait: 20s
+          group_interval: 1m
+          repeat_interval: 1h
+    receivers:
+      - name: 'null'
+      - name: 'telegram'
+        telegram_configs:
+          - bot_token_file: /etc/alertmanager/secrets/telegram-alertmanager-secret/bot-token
+            chat_id: 5213906528
+            parse_mode: HTML
+            send_resolved: true
+            message: |-
+              {{ range .Alerts }}<b>{{ .Labels.alertname }}</b> [{{ .Status }}]
+              {{ .Annotations.summary }}
+              {{ end }}
 
 # -----------------------------------------------------------------------------
 # GRAFANA — UI
@@ -157,3 +196,62 @@ kubeScheduler:
   enabled: false
 kubeProxy:
   enabled: false
+
+# -----------------------------------------------------------------------------
+# ALERT RULES (demo autoscaling / tải) — gửi Telegram qua label channel=telegram
+# additionalPrometheusRulesMap tự sinh PrometheusRule với label release đúng,
+# Prometheus nhặt nhờ ruleSelectorNilUsesHelmValues=false ở trên.
+# -----------------------------------------------------------------------------
+additionalPrometheusRulesMap:
+  demo-autoscaling-alerts:
+    groups:
+      - name: autoscaling-demo
+        rules:
+          # 1) Tải vượt ngưỡng: tổng CPU dùng của UI > 60% tổng CPU request, giữ 1 phút.
+          #    Đây là alert chắc chắn fire nhất khi chạy hey -c 80.
+          - alert: UIHighCPULoad
+            expr: |
+              sum(rate(container_cpu_usage_seconds_total{namespace="retail-store", container="ui"}[2m]))
+              /
+              sum(kube_pod_container_resource_requests{namespace="retail-store", container="ui", resource="cpu"})
+              > 0.6
+            for: 1m
+            labels:
+              severity: warning
+              channel: telegram
+            annotations:
+              summary: "UI CPU vuot 60% request — dang chiu tai cao, HPA se scale pod."
+
+          # 2) HPA chạm trần: current_replicas >= max_replicas (UI tối đa 6).
+          - alert: UIHpaMaxedOut
+            expr: |
+              kube_horizontalpodautoscaler_status_current_replicas{namespace="retail-store", horizontalpodautoscaler="ui"}
+              >=
+              kube_horizontalpodautoscaler_spec_max_replicas{namespace="retail-store", horizontalpodautoscaler="ui"}
+            for: 1m
+            labels:
+              severity: warning
+              channel: telegram
+            annotations:
+              summary: "HPA cua UI da cham tran maxReplicas — het du dia scale pod."
+
+          # 3) Pod Pending ở retail-store: tín hiệu thiếu chỗ schedule -> CA sẽ thêm node.
+          - alert: RetailStorePodPending
+            expr: sum(kube_pod_status_phase{namespace="retail-store", phase="Pending"}) > 0
+            for: 1m
+            labels:
+              severity: warning
+              channel: telegram
+            annotations:
+              summary: "Co pod Pending o retail-store — thieu node, Cluster Autoscaler se them node."
+
+          # 4) Số node tăng so với 15 phút trước -> Cluster Autoscaler đã scale-up node.
+          #    Không hardcode baseline; tự so với chính cluster 15 phút trước.
+          - alert: ClusterNodeScaledUp
+            expr: count(kube_node_info) > count(kube_node_info offset 15m)
+            for: 0m
+            labels:
+              severity: info
+              channel: telegram
+            annotations:
+              summary: "Cluster Autoscaler da them node (so node tang so voi 15 phut truoc)."

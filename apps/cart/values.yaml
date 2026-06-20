@@ -2,7 +2,7 @@ name: cart
 
 image:
   repository: 736508008585.dkr.ecr.ap-southeast-1.amazonaws.com/retail-store/cart
-  tag: "9878c8d"
+  tag: "9b76f74"
 
 resources:
   requests:

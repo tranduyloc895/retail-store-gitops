@@ -16,6 +16,7 @@ This repo is the **source of truth** for the desired state of every workload run
 - [Databases (Persistent Datastores)](#databases-persistent-datastores)
 - [Node Autoscaling (Cluster Autoscaler)](#node-autoscaling-cluster-autoscaler)
 - [Pod Autoscaling (HPA)](#pod-autoscaling-hpa)
+- [Alerting (Alertmanager → Telegram)](#alerting-alertmanager--telegram)
 - [How the ArgoCD Application Works](#how-the-argocd-application-works)
 - [CI/CD Flow with Jenkins](#cicd-flow-with-jenkins)
 - [Usage Guide](#usage-guide)
@@ -208,10 +209,10 @@ The shared Helm chart now renders an optional `env` list (`charts/microservice/t
 # apps/orders/values.yaml (excerpt)
 env:
   - {name: RETAIL_ORDERS_PERSISTENCE_PROVIDER, value: "postgres"}
-  - {name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_ENDPOINT, value: "orders-postgres:5432"}
-  - {name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_DBNAME,   value: "ordersdb"}
-  - {name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_USERNAME, value: "orders_user"}
-  - name: RETAIL_ORDERS_PERSISTENCE_POSTGRES_PASSWORD     # password from a Secret, never in values.yaml
+  - {name: RETAIL_ORDERS_PERSISTENCE_ENDPOINT, value: "orders-postgres:5432"}
+  - {name: RETAIL_ORDERS_PERSISTENCE_NAME,     value: "ordersdb"}
+  - {name: RETAIL_ORDERS_PERSISTENCE_USERNAME, value: "orders_user"}
+  - name: RETAIL_ORDERS_PERSISTENCE_PASSWORD             # password from a Secret, never in values.yaml
     valueFrom:
       secretKeyRef:
         name: orders-postgres-secret
@@ -288,6 +289,26 @@ hey -z 3m -c 50 http://<ui-loadbalancer>/      # generate load on UI
 kubectl get hpa -n retail-store -w             # watch UI replicas climb toward maxReplicas
 kubectl get nodes -w                           # if pods don't fit, CA adds a 4th node
 ```
+
+---
+
+## Alerting (Alertmanager → Telegram)
+
+Beyond collecting metrics and logs, the stack sends **proactive alerts** to Telegram via **Alertmanager** (bundled in `kube-prometheus-stack`). It is configured in `platform/monitoring/values-kube-prometheus-stack.yaml` and managed by GitOps.
+
+- **Alert rules** are declared via `additionalPrometheusRulesMap` (auto-generates a `PrometheusRule`): `UIHighCPULoad`, `UIHpaMaxedOut`, `RetailStorePodPending`, `ClusterNodeScaledUp` — tuned for the load / autoscaling scenario.
+- **Routing:** only alerts labelled `channel: telegram` reach the Telegram receiver; all default kube-prometheus-stack alerts go to a `null` receiver to avoid noise.
+- **Bot token** lives in a Kubernetes Secret created out-of-band (not committed to Git), mounted into Alertmanager via `alertmanager.alertmanagerSpec.secrets`; the config reads it with `bot_token_file`.
+
+Create the Secret before/alongside the sync, then set the numeric `chat_id` in the values file:
+
+```bash
+kubectl create secret generic telegram-alertmanager-secret \
+  --namespace monitoring \
+  --from-literal=bot-token='<BOT_TOKEN>'
+```
+
+When the load scenario runs (`hey`), the CPU-high / HPA-maxed / pod-Pending / node-added conditions fire and post to Telegram.
 
 ---
 
